@@ -42,7 +42,7 @@ function schema(): Schema {
 
 function writeGenerated(appSchema: Schema): string {
   const dir = mkdtempSync(join(tmpdir(), "openb2c-api-versioning-"));
-  writeFileSync(join(dir, "schema.sql"), genSQL(appSchema.tables, appSchema.indexes));
+  writeFileSync(join(dir, "schema.sql"), genSQL(appSchema.tables, appSchema.constraints));
   writeFileSync(join(dir, "types.ts"), genTypes(appSchema.tables, appSchema.operations, appSchema.derived));
   writeFileSync(join(dir, "services.ts"), genServices(appSchema));
   writeFileSync(join(dir, "runtime.ts"), genRuntime(appSchema));

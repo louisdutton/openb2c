@@ -162,7 +162,7 @@ describe("field metadata generation", () => {
 
     const services = await import(`${pathToFileURL(join(dir, "services.ts")).href}?${Date.now()}`);
     const db = new Database(":memory:");
-    db.exec(genSQL(schema.tables, schema.indexes));
+    db.exec(genSQL(schema.tables, schema.constraints));
 
     try {
       expect(services.createUser(db, { email: "bad", name: "Ada", status: "active", age: 42 }).ok).toBe(false);
@@ -202,7 +202,7 @@ describe("field metadata generation", () => {
 
     const services = await import(`${pathToFileURL(join(dir, "services.ts")).href}?${Date.now()}`);
     const db = new Database(":memory:");
-    db.exec(genSQL(schema.tables, schema.indexes));
+    db.exec(genSQL(schema.tables, schema.constraints));
     const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 16);
     const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
     const tomorrowDate = tomorrow.toISOString().slice(0, 10);

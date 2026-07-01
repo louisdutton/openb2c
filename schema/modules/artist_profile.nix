@@ -8,7 +8,6 @@ in
     user_id = {
       type = "integer";
       required = true;
-      unique = true;
       references = "user(id)";
       metadata = {
         label = "User";
@@ -67,5 +66,11 @@ in
       guard = E.eq (E.f "active") (E.lit 0);
       set = { active = "1"; };
     };
+  };
+
+  constraints.artist_profile.unique_user = {
+    kind = "unique";
+    fields = [ config.refs.artist_profile.user_id ];
+    message = "A user can only have one artist profile.";
   };
 }

@@ -6,7 +6,6 @@
     email = {
       type = "text";
       required = true;
-      unique = true;
       metadata = {
         label = "Email";
         helpText = "Used for identity verification and account access.";
@@ -54,5 +53,11 @@
         displayPriority = 1000;
       };
     };
+  };
+
+  constraints.user.unique_email = {
+    kind = "unique";
+    fields = [ config.refs.user.email ];
+    message = "Email must be unique.";
   };
 }

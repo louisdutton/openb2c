@@ -2,7 +2,7 @@
  * <ob-commerce> - Generated catalog, cart, checkout, and payment workflow.
  */
 import { ObApi } from "./ob-api";
-import { displayName, escapeAttr, escapeHtml, fieldLabel, formatValue, labelFor } from "../format";
+import { escapeAttr, escapeHtml, fieldLabel, formatValue, labelFor, pluralDisplayName } from "../format";
 import { stylesheetLink } from "../style-link";
 
 type FieldRef = { field: string; references?: string | null };
@@ -158,14 +158,14 @@ export class ObCommerce extends HTMLElement {
       this._selectedItemId = "";
     }
     const selectedItem = selectedItems.find((item) => String(item.id) === this._selectedItemId) || null;
+    const title = this._catalogTitle(catalogEntity);
 
     this.shadowRoot!.innerHTML = `
       ${stylesheetLink()}
 
       <div class="page-header">
         <div>
-          <div class="eyebrow">Commerce</div>
-          <h1>Checkout</h1>
+          <h1>${escapeHtml(title)}</h1>
         </div>
         ${this._cart.length > 0 ? this._renderCartChip(config) : ""}
       </div>
@@ -287,11 +287,7 @@ export class ObCommerce extends HTMLElement {
 
   private _renderGroupStep(catalogEntity: string, groups: Map<string, Record<string, unknown>[]>, config: CommerceConfig): string {
     return `
-      <section class="panel" aria-labelledby="choose-subject-title">
-        <div class="panel-header">
-          <h2 id="choose-subject-title">Choose ${escapeHtml(displayName(catalogEntity))}</h2>
-          <span class="step">Step 1 of 4</span>
-        </div>
+      <section class="catalog-section" aria-label="${escapeAttr(pluralDisplayName(catalogEntity))}">
         ${groups.size === 0 ? `<div class="empty">No available items.</div>` : this._renderGroups(groups, config)}
       </section>
     `;
@@ -302,14 +298,14 @@ export class ObCommerce extends HTMLElement {
       <section class="panel" aria-labelledby="choose-variant-title">
         <div class="panel-header">
           <div>
-            <h2 id="choose-variant-title">Choose details</h2>
-            <p class="notice">${escapeHtml(this._selectedGroup)}</p>
+            <h2 id="choose-variant-title">${escapeHtml(this._selectedGroup)}</h2>
+            <p class="notice">${escapeHtml(items.length)} available option${items.length === 1 ? "" : "s"}</p>
           </div>
-          <span class="step">Step 2 of 4</span>
+          <span class="step">Options</span>
         </div>
         ${this._renderVariants(items, selected, config, lookups)}
         <div class="actions">
-          <button type="button" data-action="back-to-groups">Change selection</button>
+          <button type="button" data-action="back-to-groups">Back</button>
         </div>
       </section>
     `;
@@ -320,10 +316,10 @@ export class ObCommerce extends HTMLElement {
       <section class="panel" aria-labelledby="configure-title">
         <div class="panel-header">
           <div>
-            <h2 id="configure-title">Configure item</h2>
+            <h2 id="configure-title">Select ${escapeHtml(this._itemTitle(item, config, lookups))}</h2>
             <p class="notice">${escapeHtml(this._itemTitle(item, config, lookups))} · ${escapeHtml(this._priceLabel(item, config))}</p>
           </div>
-          <span class="step">Step 3 of 4</span>
+          <span class="step">Basket</span>
         </div>
         ${this._renderConfigureForm(optionDefs, item, config)}
       </section>
@@ -339,7 +335,7 @@ export class ObCommerce extends HTMLElement {
             <h2 id="review-title">Review cart</h2>
             <p class="notice">${this._cart.length} line${this._cart.length === 1 ? "" : "s"} ready for checkout.</p>
           </div>
-          <span class="step">Step 4 of 4</span>
+          <span class="step">Checkout</span>
         </div>
         ${this._renderCart(config, lookups)}
         ${signedIn ? `
@@ -399,17 +395,24 @@ export class ObCommerce extends HTMLElement {
     `;
   }
 
+  private _catalogTitle(catalogEntity: string): string {
+    return pluralDisplayName(catalogEntity);
+  }
+
   private _renderGroups(groups: Map<string, Record<string, unknown>[]>, config: CommerceConfig): string {
     return `
       <div class="selector-grid">
         ${[...groups.entries()].map(([key, items]) => {
           const first = items[0];
           const description = this._fieldValue(first, config.catalog?.description);
+          const timing = this._cardTemporalLabel(items, config);
           const price = this._priceLabel(first, config);
           return `
             <button type="button" class="selector-card ${key === this._selectedGroup ? "selected" : ""}" data-group="${escapeAttr(key)}" aria-pressed="${key === this._selectedGroup}">
+              ${this._renderItemMedia(first, key)}
               <span class="selector-title">${escapeHtml(key)}</span>
               <span class="selector-meta">
+                ${timing ? `<span>${escapeHtml(timing)}</span>` : ""}
                 ${description ? `<span>${escapeHtml(description)}</span>` : ""}
                 <span>${escapeHtml(items.length)} option${items.length === 1 ? "" : "s"}${price ? ` from ${escapeHtml(price)}` : ""}</span>
               </span>
@@ -418,6 +421,42 @@ export class ObCommerce extends HTMLElement {
         }).join("")}
       </div>
     `;
+  }
+
+  private _renderItemMedia(item: Record<string, unknown>, label: string): string {
+    const image = this._imageUrl(item);
+    if (image) {
+      return `<span class="selector-media"><img src="${escapeAttr(image)}" alt="" loading="lazy" /></span>`;
+    }
+    return `<span class="selector-media placeholder" aria-hidden="true">${escapeHtml(label.trim().charAt(0).toUpperCase() || "O")}</span>`;
+  }
+
+  private _imageUrl(item: Record<string, unknown>): string {
+    for (const field of ["image_url", "image", "photo_url", "thumbnail_url", "poster_url"]) {
+      const value = item[field];
+      if (typeof value === "string" && value.trim()) return value;
+    }
+    return "";
+  }
+
+  private _cardTemporalLabel(items: Record<string, unknown>[], config: CommerceConfig): string {
+    const sorted = [...items].sort((a, b) => temporalSortValue(a) - temporalSortValue(b));
+    const item = sorted[0];
+    if (!item) return "";
+    const startField = this._temporalField(item, config, ["starts_at", "start_at", "scheduled_at", "date"]);
+    if (!startField) return "";
+    const endField = this._temporalField(item, config, ["ends_at", "end_at", "ends_on", "end_date"]);
+    const start = formatValue(startField, item[startField]);
+    const end = endField ? formatValue(endField, item[endField]) : "";
+    return [start, end].filter(Boolean).join(" - ");
+  }
+
+  private _temporalField(item: Record<string, unknown>, config: CommerceConfig, preferred: string[]): string {
+    const candidates = [
+      ...(config.catalog?.variantFields || []).map((field) => field.field),
+      ...Object.keys(item),
+    ];
+    return candidates.find((field) => preferred.includes(field) && item[field] !== null && item[field] !== undefined && item[field] !== "") || "";
   }
 
   private _renderVariants(items: Record<string, unknown>[], selected: Record<string, unknown> | null, config: CommerceConfig, lookups: LookupMap): string {
@@ -736,8 +775,6 @@ export class ObCommerce extends HTMLElement {
       const raw = sessionStorage.getItem(this._storageKey(api));
       if (!raw) return;
       const data = JSON.parse(raw);
-      if (typeof data.selectedGroup === "string") this._selectedGroup = data.selectedGroup;
-      if (typeof data.selectedItemId === "string") this._selectedItemId = data.selectedItemId;
       if (typeof data.quantity === "string") this._quantity = data.quantity;
       if (data.optionState && typeof data.optionState === "object" && !Array.isArray(data.optionState)) {
         this._optionState = Object.fromEntries(
@@ -768,14 +805,12 @@ export class ObCommerce extends HTMLElement {
 
   private _persistState(api: ObApi) {
     try {
-      const empty = !this._selectedGroup && !this._selectedItemId && this._quantity === "1" && this._cart.length === 0 && !this._reviewingCart;
+      const empty = this._quantity === "1" && this._cart.length === 0 && !this._reviewingCart;
       if (empty) {
         sessionStorage.removeItem(this._storageKey(api));
         return;
       }
       sessionStorage.setItem(this._storageKey(api), JSON.stringify({
-        selectedGroup: this._selectedGroup,
-        selectedItemId: this._selectedItemId,
         quantity: this._quantity,
         optionState: this._optionState,
         cart: this._cart,
@@ -798,6 +833,16 @@ export class ObCommerce extends HTMLElement {
 
 function cssEscape(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+function temporalSortValue(item: Record<string, unknown>): number {
+  for (const field of ["starts_at", "start_at", "scheduled_at", "date"]) {
+    const value = item[field];
+    if (value === null || value === undefined || value === "") continue;
+    const timestamp = Date.parse(String(value));
+    if (Number.isFinite(timestamp)) return timestamp;
+  }
+  return Number.POSITIVE_INFINITY;
 }
 
 customElements.define("ob-commerce", ObCommerce);

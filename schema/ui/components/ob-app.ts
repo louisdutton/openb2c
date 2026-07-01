@@ -2,6 +2,7 @@
  * <ob-app> - Public generated web app shell.
  */
 import { ObApi } from "./ob-api";
+import { pluralDisplayName } from "../format";
 import { apiDescription, apiLogo, apiTitle, focusOutlet, readShellAttributes, renderApiProvider, renderSkipLink, SHELL_OBSERVED_ATTRIBUTES } from "../shell";
 import "./ob-auth-menu";
 import "./ob-route-outlet";
@@ -35,7 +36,7 @@ export class ObApp extends HTMLElement {
           </div>
           <div class="top-actions">
             <ob-auth-menu></ob-auth-menu>
-            <button class="nav-button" type="button" data-action="checkout" hidden>Book tickets</button>
+            <button class="nav-button" type="button" data-action="commerce" hidden>Browse</button>
           </div>
         </header>
         <ob-route-outlet></ob-route-outlet>
@@ -45,7 +46,7 @@ export class ObApp extends HTMLElement {
     this.querySelector<HTMLButtonElement>('[data-action="skip"]')?.addEventListener("click", () => {
       focusOutlet(this, "ob-route-outlet");
     });
-    this.querySelector<HTMLButtonElement>('[data-action="checkout"]')?.addEventListener("click", () => {
+    this.querySelector<HTMLButtonElement>('[data-action="commerce"]')?.addEventListener("click", () => {
       location.hash = "#/commerce";
     });
 
@@ -55,9 +56,10 @@ export class ObApp extends HTMLElement {
       const titleEl = this.querySelector<HTMLElement>('[data-role="title"]');
       const descriptionEl = this.querySelector<HTMLElement>('[data-role="description"]');
       const logoEl = this.querySelector<HTMLImageElement>('[data-role="logo"]');
-      const checkoutButton = this.querySelector<HTMLButtonElement>('[data-action="checkout"]');
+      const commerceButton = this.querySelector<HTMLButtonElement>('[data-action="commerce"]');
       const title = apiTitle(api);
       const logo = apiLogo(api);
+      const catalogEntity = api.getEcommerceConfig()?.catalog?.entity;
       if (titleEl) titleEl.textContent = title;
       if (descriptionEl) descriptionEl.textContent = apiDescription(api);
       if (logoEl && logo) {
@@ -68,9 +70,31 @@ export class ObApp extends HTMLElement {
         logoEl.hidden = true;
         logoEl.removeAttribute("src");
       }
-      if (checkoutButton) checkoutButton.hidden = !api.hasCommerceWorkflow();
+      if (commerceButton) {
+        commerceButton.hidden = !api.hasCommerceWorkflow();
+        commerceButton.textContent = commerceActionLabel(api, catalogEntity);
+      }
     });
   }
+}
+
+function commerceActionLabel(api: ObApi, catalogEntity?: string): string {
+  if (!catalogEntity) return "Browse";
+  if (isTemporalCatalogEntity(api, catalogEntity)) return "What's on";
+  return `Browse ${pluralDisplayName(catalogEntity)}`;
+}
+
+function isTemporalCatalogEntity(api: ObApi, entity: string): boolean {
+  const schema = api.getSchema(entity);
+  return Object.entries(schema?.properties || {}).some(([field, prop]) => isPublicTemporalField(field, prop));
+}
+
+function isPublicTemporalField(field: string, prop: any): boolean {
+  if (field === "created_at" || field === "updated_at") return false;
+  const format = prop?.["x-openb2c-field"]?.format || prop?.format || "";
+  if (format === "date" || format === "date-time") return true;
+  if (format === "time") return false;
+  return /(^|_)(date|starts_at|start_at|scheduled_at|ends_at|end_at)$/.test(field) || field.endsWith("_date");
 }
 
 customElements.define("ob-app", ObApp);

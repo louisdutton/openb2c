@@ -61,6 +61,7 @@ export type DerivedFields = Record<string, Record<string, DerivedField>>;
 export interface Index {
   columns: string[];
   unique: boolean;
+  condition?: Expr | null;
 }
 
 export type Indexes = Record<string, Record<string, Index>>;
@@ -78,13 +79,19 @@ export interface Expr {
   [key: string]: unknown;
 }
 
-export interface CrossFieldValidationConstraint {
+export type ConstraintKind = "unique" | "check";
+export type ConstraintEnforcement = "auto" | "database" | "application" | "both";
+
+export interface Constraint {
+  kind: ConstraintKind;
   fields: FieldRef[];
-  expression: Expr;
-  message: string;
+  expression?: Expr | null;
+  condition?: Expr | null;
+  message?: string | null;
+  enforcement?: ConstraintEnforcement;
 }
 
-export type Validations = Record<string, Record<string, CrossFieldValidationConstraint>>;
+export type Constraints = Record<string, Record<string, Constraint>>;
 
 export interface Cascade {
   entity: string;
@@ -361,10 +368,9 @@ export interface Schema {
   workflows?: WorkflowConfig;
   tables: Tables;
   derived?: DerivedFields;
-  indexes?: Indexes;
+  constraints?: Constraints;
   refs?: Refs;
   relationships?: Relationships;
-  validations?: Validations;
   operations: Operations;
   ecommerce?: EcommerceConfig;
 }

@@ -4,7 +4,7 @@
  * Usage: nix eval --json -f schema/default.nix | bun schema/codegen/index.ts
  */
 
-export type { AppMetadata, OrganizationMetadata, Column, DerivedField, DerivedFields, Tables, Index, Indexes, Expr, Cascade, Effect, Operation, Operations, SeedConfig, SeedRows, SeedValue, IntegrationEnvVarMetadata, IntegrationMetadata, IntegrationsConfig, WebhookIntegrationMetadata, WebhookSigningMetadata, Schema } from "./types";
+export type { AppMetadata, OrganizationMetadata, Column, Constraint, Constraints, DerivedField, DerivedFields, Tables, Expr, Cascade, Effect, Operation, Operations, SeedConfig, SeedRows, SeedValue, IntegrationEnvVarMetadata, IntegrationMetadata, IntegrationsConfig, WebhookIntegrationMetadata, WebhookSigningMetadata, Schema } from "./types";
 export { DEFAULT_ORGANIZATION_METADATA, SYSTEM_DEFAULT_PORTS, SYSTEM_DEFAULT_VERSION, getAppMetadata, getDefaultDatabasePath, hasCommerceWorkflow, pascalCase, camelCase, quoteReserved, TS_TYPE_MAP } from "./utils";
 export { envVarSpecs, requiredProductionEnvVars, genEnvExample } from "./config";
 export { sqlType, genSQL } from "./sql";
@@ -56,7 +56,7 @@ if (import.meta.main) {
   const outDir = Bun.argv[2] || join(import.meta.dir, "..", "..", "src", "generated");
   mkdirSync(outDir, { recursive: true });
 
-  writeFileSync(join(outDir, "schema.sql"), genSQL(schema.tables, schema.indexes));
+  writeFileSync(join(outDir, "schema.sql"), genSQL(schema.tables, schema.constraints));
   writeFileSync(join(outDir, "seed.sql"), genSeedSQL(schema, "reference"));
   writeFileSync(join(outDir, "fixtures.sql"), genSeedSQL(schema, "fixtures"));
   writeFileSync(join(outDir, "types.ts"), genTypes(schema.tables, schema.operations, schema.derived));

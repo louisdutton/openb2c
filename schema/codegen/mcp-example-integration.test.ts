@@ -55,7 +55,7 @@ async function loadExampleSchema(example: "duchyopera" | "ticketing"): Promise<S
 
 function writeGeneratedExample(schema: Schema, prefix: string): string {
   const dir = mkdtempSync(join(tmpdir(), `openb2c-${prefix}-mcp-`));
-  writeFileSync(join(dir, "schema.sql"), genSQL(schema.tables, schema.indexes));
+  writeFileSync(join(dir, "schema.sql"), genSQL(schema.tables, schema.constraints));
   writeFileSync(join(dir, "seed.sql"), genSeedSQL(schema, "reference"));
   writeFileSync(join(dir, "fixtures.sql"), genSeedSQL(schema, "fixtures"));
   writeFileSync(join(dir, "types.ts"), genTypes(schema.tables, schema.operations));

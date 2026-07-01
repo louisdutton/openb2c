@@ -1,5 +1,5 @@
 import assert from "assert/strict";
-import type { Column, Indexes, Tables } from "./types";
+import type { Column, Constraints, Expr, Indexes, Tables } from "./types";
 import { quoteReserved } from "./utils";
 
 export function sqlType(col: Column, availableTables?: string[]): string {
@@ -92,6 +92,84 @@ function mergeIndexes(explicitIndexes: Indexes, inferredIndexes: Indexes): Index
   return merged;
 }
 
+function indexesForUniqueConstraints(tables: Tables, constraints: Constraints = {}): Indexes {
+  const indexes: Indexes = {};
+  for (const [table, tableConstraints] of Object.entries(constraints)) {
+    const cols = tables[table];
+    assert(cols, `Constraint configured for non-existent table: ${table}`);
+    for (const [name, constraint] of Object.entries(tableConstraints)) {
+      if (constraint.kind !== "unique") continue;
+      if (constraint.enforcement === "application") continue;
+      assert(constraint.fields.length > 0, `Constraint ${name} on ${table} must include at least one field`);
+      const columns = constraint.fields.map((field) => {
+        assert(field.table === table, `Constraint ${name} on ${table} references non-local field: ${field.table}.${field.field}`);
+        assert(cols[field.field], `Constraint ${name} on ${table} references non-existent column: ${field.field}`);
+        return field.field;
+      });
+      indexes[table] ||= {};
+      indexes[table][name] = { columns, unique: true, condition: constraint.condition };
+    }
+  }
+  return indexes;
+}
+
+function dbCheckConstraintsForTable(table: string, cols: Record<string, Column>, constraints: Constraints = {}): string[] {
+  const checks: string[] = [];
+  for (const [name, constraint] of Object.entries(constraints[table] || {})) {
+    if (constraint.kind !== "check") continue;
+    if (constraint.enforcement === "application") continue;
+    assert(constraint.expression, `Constraint ${name} on ${table} requires an expression`);
+    const expression = compileSqlExpr(constraint.expression, cols);
+    const condition = constraint.condition ? compileSqlExpr(constraint.condition, cols) : "";
+    const check = condition ? `((NOT ${condition}) OR ${expression})` : expression;
+    checks.push(`    CONSTRAINT ${quoteReserved(`${table}_${name}`)} CHECK (${check})`);
+  }
+  return checks;
+}
+
+function compileSqlExpr(expr: Expr, cols: Record<string, Column>): string {
+  switch (expr._t) {
+    case "field": {
+      const name = String(expr.name || "");
+      assert(cols[name], `Constraint expression references non-existent column: ${name}`);
+      return quoteReserved(name);
+    }
+    case "lit":
+      return sqlLiteral(expr.value);
+    case "bin": {
+      const left = compileSqlExpr(expr.left as Expr, cols);
+      const right = compileSqlExpr(expr.right as Expr, cols);
+      const op = sqlBinaryOperator(String(expr.op || ""));
+      return `(${left} ${op} ${right})`;
+    }
+    case "un": {
+      const arg = compileSqlExpr(expr.arg as Expr, cols);
+      if (expr.op === "isNull") return `(${arg} IS NULL)`;
+      if (expr.op === "notNull") return `(${arg} IS NOT NULL)`;
+      if (expr.op === "!") return `(NOT ${arg})`;
+      throw new Error(`Unsupported SQL constraint unary operator: ${String(expr.op)}`);
+    }
+    default:
+      throw new Error(`Unsupported SQL constraint expression type: ${String(expr._t)}`);
+  }
+}
+
+function sqlBinaryOperator(op: string): string {
+  if (op === "==") return "=";
+  if (op === "!=") return "!=";
+  if (["<", "<=", ">", ">=", "=", "+", "-", "*", "/", "AND", "OR"].includes(op)) return op;
+  if (op === "&&") return "AND";
+  if (op === "||") return "OR";
+  throw new Error(`Unsupported SQL constraint binary operator: ${op}`);
+}
+
+function sqlLiteral(value: unknown): string {
+  if (value === null || value === undefined) return "NULL";
+  if (typeof value === "number") return Number.isFinite(value) ? String(value) : "NULL";
+  if (typeof value === "boolean") return value ? "1" : "0";
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
 function genIndexSQL(tables: Tables, indexes: Indexes): string[] {
   const stmts: string[] = [];
   for (const [table, tableIndexes] of Object.entries(indexes)) {
@@ -105,14 +183,16 @@ function genIndexSQL(tables: Tables, indexes: Indexes): string[] {
       const unique = index.unique ? "UNIQUE " : "";
       const tableName = quoteReserved(table);
       const indexName = `${table}_${name}`;
-      stmts.push(`CREATE ${unique}INDEX IF NOT EXISTS ${quoteReserved(indexName)} ON ${tableName} (${index.columns.join(", ")});`);
+      const where = index.condition ? ` WHERE ${compileSqlExpr(index.condition, cols)}` : "";
+      stmts.push(`CREATE ${unique}INDEX IF NOT EXISTS ${quoteReserved(indexName)} ON ${tableName} (${index.columns.join(", ")})${where};`);
     }
   }
   return stmts;
 }
 
-export function genSQL(tables: Tables, indexes: Indexes = {}): string {
-  const allIndexes = mergeIndexes(indexes, inferPerformanceIndexes(tables, indexes));
+export function genSQL(tables: Tables, constraints: Constraints = {}): string {
+  const constraintIndexes = indexesForUniqueConstraints(tables, constraints);
+  const allIndexes = mergeIndexes(constraintIndexes, inferPerformanceIndexes(tables, constraintIndexes));
   // Topological sort: tables with no FK deps first
   const tableNames = Object.keys(tables);
   const deps: Record<string, string[]> = {};
@@ -146,6 +226,7 @@ export function genSQL(tables: Tables, indexes: Indexes = {}): string {
     for (const [col, c] of Object.entries(cols)) {
       defs.push(`    ${col} ${sqlType(c, tableNames)}`);
     }
+    defs.push(...dbCheckConstraintsForTable(table, cols, constraints));
     const tableName = quoteReserved(table);
     stmts.push(`CREATE TABLE IF NOT EXISTS ${tableName} (\n${defs.join(",\n")}\n);`);
   }

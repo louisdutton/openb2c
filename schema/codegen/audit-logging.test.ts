@@ -67,7 +67,7 @@ function schema(): Schema {
 
 function writeGenerated(appSchema: Schema): string {
   const dir = mkdtempSync(join(tmpdir(), "openb2c-audit-logging-"));
-  writeFileSync(join(dir, "schema.sql"), genSQL(appSchema.tables, appSchema.indexes));
+  writeFileSync(join(dir, "schema.sql"), genSQL(appSchema.tables, appSchema.constraints));
   writeFileSync(join(dir, "types.ts"), genTypes(appSchema.tables, appSchema.operations, appSchema.derived));
   writeFileSync(join(dir, "services.ts"), genServices(appSchema));
   writeFileSync(join(dir, "runtime.ts"), genRuntime(appSchema));
@@ -192,7 +192,7 @@ describe("generated audit logging", () => {
     const dir = writeGenerated(appSchema);
     const { createTicket } = await import(pathToFileURL(join(dir, "services.ts")).href);
     const { SYSTEM_AUTH_CONTEXT } = await import(pathToFileURL(join(dir, "types.ts")).href);
-    const sql = genSQL(appSchema.tables, appSchema.indexes);
+    const sql = genSQL(appSchema.tables, appSchema.constraints);
     const first = new Database(":memory:");
     const second = new Database(":memory:");
 

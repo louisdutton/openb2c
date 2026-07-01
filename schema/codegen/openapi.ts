@@ -372,23 +372,26 @@ function openApiWorkflowMetadata(schema: Schema): Record<string, unknown> | null
 }
 
 function openApiValidationMetadata(schema: Schema): Record<string, unknown> | null {
-  const crossFieldConstraints: Record<string, Record<string, unknown>> = {};
-  for (const [entity, constraints] of Object.entries(schema.validations || {})) {
-    crossFieldConstraints[entity] = {};
+  const logicalConstraints: Record<string, Record<string, unknown>> = {};
+  for (const [entity, constraints] of Object.entries(schema.constraints || {})) {
+    logicalConstraints[entity] = {};
     for (const [name, constraint] of Object.entries(constraints)) {
-      crossFieldConstraints[entity][name] = {
+      logicalConstraints[entity][name] = {
+        kind: constraint.kind,
         fields: constraint.fields.map(field => ({
           table: field.table,
           field: field.field,
           references: field.references,
         })),
-        expression: constraint.expression,
-        message: constraint.message,
+        ...(constraint.expression ? { expression: constraint.expression } : {}),
+        ...(constraint.condition ? { condition: constraint.condition } : {}),
+        ...(constraint.message ? { message: constraint.message } : {}),
+        enforcement: constraint.enforcement || "auto",
       };
     }
   }
-  if (Object.keys(crossFieldConstraints).length === 0) return null;
-  return { crossFieldConstraints };
+  if (Object.keys(logicalConstraints).length === 0) return null;
+  return { constraints: logicalConstraints };
 }
 
 function errorResponse(description: string): unknown {

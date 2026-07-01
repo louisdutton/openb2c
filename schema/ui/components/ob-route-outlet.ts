@@ -59,7 +59,7 @@ export class ObRouteOutlet extends HTMLElement {
       if (returnTo) page.setAttribute("return-to", returnTo);
       return { node: page };
     }
-    if (hash === "/commerce" && api.hasCommerceWorkflow()) {
+    if ((hash === "/" || hash === "/commerce") && api.hasCommerceWorkflow()) {
       await import("./ob-commerce");
       return { node: document.createElement("ob-commerce") };
     }

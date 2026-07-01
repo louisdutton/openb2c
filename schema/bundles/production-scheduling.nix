@@ -399,22 +399,35 @@ in
     };
   };
 
-  indexes.production_member.unique_production_user = {
-    columns = [ "production_id" "user_id" ];
-    unique = true;
+  constraints.production_member.unique_production_user = {
+    kind = "unique";
+    fields = [
+      config.refs.production_member.production_id
+      config.refs.production_member.user_id
+    ];
+    message = "A user can only be assigned once to the same production.";
   };
 
-  indexes.rehearsal_call.unique_rehearsal_user = {
-    columns = [ "rehearsal_id" "user_id" ];
-    unique = true;
+  constraints.rehearsal_call.unique_rehearsal_user = {
+    kind = "unique";
+    fields = [
+      config.refs.rehearsal_call.rehearsal_id
+      config.refs.rehearsal_call.user_id
+    ];
+    message = "A user can only be called once for the same rehearsal.";
   };
 
-  indexes.rehearsal_coverage.unique_requirement_rehearsal = {
-    columns = [ "requirement_id" "rehearsal_id" ];
-    unique = true;
+  constraints.rehearsal_coverage.unique_requirement_rehearsal = {
+    kind = "unique";
+    fields = [
+      config.refs.rehearsal_coverage.requirement_id
+      config.refs.rehearsal_coverage.rehearsal_id
+    ];
+    message = "A requirement can only have one coverage record for the same rehearsal.";
   };
 
-  validations.rehearsal.endsAfterStart = {
+  constraints.rehearsal.ends_after_start = {
+    kind = "check";
     fields = [
       config.refs.rehearsal.starts_at
       config.refs.rehearsal.ends_at

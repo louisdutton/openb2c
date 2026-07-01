@@ -299,17 +299,21 @@ const authPanel = `
 `;
 
 const authPage = `
-  ob-auth-page {
-    display: block;
-    max-width: 520px;
-    margin: 0 auto;
-  }
-  ob-auth-page[signed-in] {
-    max-width: 860px;
-  }
-  ob-auth-page .page-header {
-    margin-bottom: 18px;
-  }
+ob-auth-page {
+  display: block;
+  max-width: 520px;
+  margin: 0 auto;
+}
+ob-auth-page[signed-in] {
+  max-width: 860px;
+}
+ob-auth-page .auth-page {
+  display: grid;
+  gap: 24px;
+}
+ob-auth-page .page-header {
+  margin-bottom: 0;
+}
   ob-auth-page h1 {
     font-size: 28px;
     line-height: 1.15;
@@ -326,7 +330,6 @@ const authPage = `
 const accountSummary = `
   :host(ob-account-summary) {
     display: block;
-    margin-bottom: 16px;
     font-family: system-ui, -apple-system, sans-serif;
   }
   :host(ob-account-summary) .account-grid {
@@ -445,6 +448,12 @@ const commerce = `
     line-height: 1.15;
     font-weight: 800;
   }
+  :host(ob-commerce) .page-subtitle {
+    color: var(--ob-text-muted);
+    font-size: 14px;
+    line-height: 1.45;
+    margin-top: 6px;
+  }
   :host(ob-commerce) .cart-chip {
     min-height: 36px;
     padding: 8px 12px;
@@ -458,6 +467,48 @@ const commerce = `
   :host(ob-commerce) .commerce-shell {
     max-width: 900px;
     margin: 0 auto;
+  }
+  :host(ob-commerce) .catalog-section {
+    max-width: 1100px;
+    margin: 0 auto;
+  }
+  :host(ob-commerce) .catalog-section .selector-grid {
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 16px;
+  }
+  :host(ob-commerce) .catalog-section .selector-card {
+    min-height: 300px;
+    padding: 0;
+    overflow: hidden;
+    border-radius: var(--ob-radius);
+    background: var(--ob-bg);
+  }
+  :host(ob-commerce) .catalog-section .selector-title,
+  :host(ob-commerce) .catalog-section .selector-meta {
+    margin-left: 16px;
+    margin-right: 16px;
+  }
+  :host(ob-commerce) .catalog-section .selector-title {
+    margin-top: 14px;
+    font-size: 18px;
+  }
+  :host(ob-commerce) .catalog-section .selector-meta {
+    margin-bottom: 16px;
+  }
+  :host(ob-commerce) .selector-media {
+    display: grid;
+    place-items: center;
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    background: linear-gradient(135deg, #f7f7f4, #e7ebe7);
+    color: var(--ob-text-muted);
+    font-size: 44px;
+    font-weight: 800;
+  }
+  :host(ob-commerce) .selector-media img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
   }
   :host(ob-commerce) .panel {
     background: var(--ob-bg);

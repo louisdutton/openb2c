@@ -40,8 +40,7 @@ export function validateSchema(schema: Schema): SchemaDiagnostic[] {
     seed: schema.seed || { reference: {}, fixtures: {}, applyFixturesByDefault: false },
     integrations: schema.integrations,
     operations: schema.operations || {},
-    indexes: schema.indexes || {},
-    validations: schema.validations || {},
+    constraints: schema.constraints || {},
     workflows: schema.workflows || { groups: {} },
   } as Schema;
 
@@ -53,9 +52,8 @@ export function validateSchema(schema: Schema): SchemaDiagnostic[] {
   validateAudit(normalized, diagnostics);
   validateSeed(normalized, diagnostics);
   validateIntegrations(normalized, diagnostics);
-  validateIndexes(normalized, diagnostics);
+  validateConstraints(normalized, diagnostics);
   validateRelationships(normalized, diagnostics);
-  validateCrossFieldValidations(normalized, diagnostics);
   validateWorkflows(normalized, diagnostics);
   validateOperations(normalized, diagnostics);
   validateEcommerce(normalized, diagnostics);
@@ -262,25 +260,6 @@ function validateColumnRelationship(schema: Schema, table: string, field: string
   }
 }
 
-function validateIndexes(schema: Schema, diagnostics: SchemaDiagnostic[]): void {
-  for (const [table, indexes] of Object.entries(schema.indexes || {})) {
-    if (!tableExists(schema.tables, table)) {
-      add(diagnostics, `indexes.${table}`, `references unknown table ${JSON.stringify(table)}`);
-      continue;
-    }
-    for (const [name, index] of Object.entries(indexes)) {
-      if (index.columns.length === 0) {
-        add(diagnostics, `indexes.${table}.${name}.columns`, "must include at least one column");
-      }
-      for (const column of index.columns) {
-        if (!columnExists(schema.tables, table, column)) {
-          add(diagnostics, `indexes.${table}.${name}.columns`, `references unknown field ${table}.${column}`);
-        }
-      }
-    }
-  }
-}
-
 function validateRelationships(schema: Schema, diagnostics: SchemaDiagnostic[]): void {
   for (const [entity, relationships] of Object.entries(schema.relationships || {})) {
     if (!tableExists(schema.tables, entity)) {
@@ -293,29 +272,41 @@ function validateRelationships(schema: Schema, diagnostics: SchemaDiagnostic[]):
   }
 }
 
-function validateCrossFieldValidations(schema: Schema, diagnostics: SchemaDiagnostic[]): void {
-  for (const [entity, constraints] of Object.entries(schema.validations || {})) {
+function validateConstraints(schema: Schema, diagnostics: SchemaDiagnostic[]): void {
+  for (const [entity, constraints] of Object.entries(schema.constraints || {})) {
     if (!tableExists(schema.tables, entity)) {
-      add(diagnostics, `validations.${entity}`, `references unknown entity ${JSON.stringify(entity)}`);
+      add(diagnostics, `constraints.${entity}`, `references unknown entity ${JSON.stringify(entity)}`);
       continue;
     }
     for (const [name, constraint] of Object.entries(constraints)) {
-      const path = `validations.${entity}.${name}`;
-      if (!constraint.fields || constraint.fields.length < 2) {
-        add(diagnostics, `${path}.fields`, "must include at least two fields");
+      const path = `constraints.${entity}.${name}`;
+      if (!["unique", "check"].includes(constraint.kind)) {
+        add(diagnostics, `${path}.kind`, "must be one of unique or check");
+      }
+      if (constraint.enforcement && !["auto", "database", "application", "both"].includes(constraint.enforcement)) {
+        add(diagnostics, `${path}.enforcement`, "must be one of auto, database, application, or both");
+      }
+      if (!constraint.fields || constraint.fields.length === 0) {
+        add(diagnostics, `${path}.fields`, "must include at least one field");
       }
       for (const [index, field] of (constraint.fields || []).entries()) {
         validateFieldRef(schema, field, `${path}.fields.${index}`, diagnostics, entity);
       }
-      if (!constraint.message) {
-        add(diagnostics, `${path}.message`, "is required");
+      if (constraint.kind === "unique" && constraint.expression) {
+        add(diagnostics, `${path}.expression`, "is only supported for check constraints");
       }
-      validateConstraintExpr(schema, entity, constraint.expression, `${path}.expression`, diagnostics);
-      const declaredFields = new Set((constraint.fields || []).filter(field => field.table === entity).map(field => field.field));
-      for (const field of expressionFields(constraint.expression)) {
-        if (!declaredFields.has(field)) {
-          add(diagnostics, `${path}.fields`, `must include expression field ${entity}.${field}`);
+      if (constraint.kind === "check") {
+        if (!constraint.message) add(diagnostics, `${path}.message`, "is required");
+        validateConstraintExpr(schema, entity, constraint.expression, `${path}.expression`, diagnostics);
+        const declaredFields = new Set((constraint.fields || []).filter(field => field.table === entity).map(field => field.field));
+        for (const field of expressionFields(constraint.expression)) {
+          if (!declaredFields.has(field)) {
+            add(diagnostics, `${path}.fields`, `must include expression field ${entity}.${field}`);
+          }
         }
+      }
+      if (constraint.condition) {
+        validateConstraintExpr(schema, entity, constraint.condition, `${path}.condition`, diagnostics);
       }
     }
   }
@@ -370,7 +361,7 @@ function validateSeed(schema: Schema, diagnostics: SchemaDiagnostic[]): void {
           }
         }
 
-        if (seedConflictColumns(columns, row).length === 0) {
+        if (seedConflictColumns(schema, table, columns, row).length === 0) {
           add(diagnostics, path, "must include a primary-key or unique field so seeding remains idempotent");
         }
       });
@@ -382,7 +373,7 @@ function hasOwn(row: Record<string, SeedValue>, field: string): boolean {
   return Object.prototype.hasOwnProperty.call(row, field);
 }
 
-function seedConflictColumns(columns: Record<string, Column>, row: Record<string, SeedValue>): string[] {
+function seedConflictColumns(schema: Schema, table: string, columns: Record<string, Column>, row: Record<string, SeedValue>): string[] {
   const primaryKey = Object.entries(columns)
     .filter(([field, column]) => column.pk && hasOwn(row, field))
     .map(([field]) => field);
@@ -390,7 +381,17 @@ function seedConflictColumns(columns: Record<string, Column>, row: Record<string
 
   const unique = Object.entries(columns)
     .find(([field, column]) => column.unique && hasOwn(row, field));
-  return unique ? [unique[0]] : [];
+  if (unique) return [unique[0]];
+
+  for (const constraint of Object.values(schema.constraints?.[table] || {})) {
+    if (constraint.kind !== "unique" || constraint.condition || constraint.enforcement === "application") continue;
+    const fields = constraint.fields.filter(field => field.table === table).map(field => field.field);
+    if (fields.length > 0 && fields.length === constraint.fields.length && fields.every(field => hasOwn(row, field))) {
+      return fields;
+    }
+  }
+
+  return [];
 }
 
 function validateSeedValue(column: Column, value: SeedValue, path: string, diagnostics: SchemaDiagnostic[]): void {

@@ -5,7 +5,15 @@ let
 in
 {
   tables.user = {
-    customer_type = { type = "text"; default = "'individual'"; };  # individual, patron, organization
+    customer_type = {
+      type = "text";
+      default = "'individual'";
+      metadata = {
+        label = "Customer type";
+        displayPriority = 900;
+      };
+      validation.enum = [ "individual" "patron" "organization" ];
+    };
   };
 
   operations.user = {

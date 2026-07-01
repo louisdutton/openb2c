@@ -44,24 +44,25 @@ in
     };
   };
 
-  indexes.booking.unique_payment_reference = {
-    columns = [ "payment_reference" ];
-    unique = true;
+  constraints.booking.unique_payment_reference = {
+    kind = "unique";
+    fields = [ config.refs.booking.payment_reference ];
+    message = "Payment reference must be unique.";
   };
 
-  indexes.booking_ticket.unique_pair = {
-    columns = [ "booking_id" "ticket_id" ];
-    unique = true;
+  constraints.booking_ticket.unique_ticket = {
+    kind = "unique";
+    fields = [ config.refs.booking_ticket.ticket_id ];
+    message = "A ticket can only belong to one active booking.";
   };
 
-  indexes.booking_ticket.unique_ticket = {
-    columns = [ "ticket_id" ];
-    unique = true;
-  };
-
-  indexes.transaction.unique_reference = {
-    columns = [ "reference" ];
-    unique = true;
+  constraints.booking_ticket.unique_pair = {
+    kind = "unique";
+    fields = [
+      config.refs.booking_ticket.booking_id
+      config.refs.booking_ticket.ticket_id
+    ];
+    message = "A ticket can only appear once in the same booking.";
   };
 
   operations.booking = {

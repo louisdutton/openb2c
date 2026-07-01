@@ -46,9 +46,13 @@ function invalidSchema(): Schema {
         order_id: { ...baseColumn, type: "integer", references: "order(id)" },
       },
     },
-    indexes: {
+    constraints: {
       order: {
-        by_missing: { columns: ["missing"], unique: false },
+        unique_missing: {
+          kind: "unique",
+          fields: [{ table: "order", field: "missing", references: null }],
+          message: "Missing field must be unique.",
+        },
       },
     },
     relationships: {
@@ -86,7 +90,7 @@ describe("schema validation diagnostics", () => {
 
     expect(diagnostics).toEqual(expect.arrayContaining([
       { path: "tables.order.user_id.references", message: 'references unknown table "person"' },
-      { path: "indexes.order.by_missing.columns", message: "references unknown field order.missing" },
+      { path: "constraints.order.unique_missing.fields.0.field", message: "references unknown field order.missing" },
       { path: "relationships.order.owner.field.field", message: "references unknown field order.owner_id" },
       { path: "operations.order.ship.set.state", message: "references unknown field order.state" },
       { path: "operations.order.ship.guard.name", message: "references unknown field order.state" },

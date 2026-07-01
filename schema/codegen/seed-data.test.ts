@@ -87,7 +87,7 @@ function seedSchema(overrides: Partial<Schema> = {}): Schema {
 
 function writeGenerated(schema: Schema): string {
   const dir = mkdtempSync(join(tmpdir(), "openb2c-seed-"));
-  writeFileSync(join(dir, "schema.sql"), genSQL(schema.tables, schema.indexes));
+  writeFileSync(join(dir, "schema.sql"), genSQL(schema.tables, schema.constraints));
   writeFileSync(join(dir, "seed.sql"), genSeedSQL(schema, "reference"));
   writeFileSync(join(dir, "fixtures.sql"), genSeedSQL(schema, "fixtures"));
   writeFileSync(join(dir, "types.ts"), genTypes(schema.tables, schema.operations, schema.derived));
@@ -122,6 +122,38 @@ describe("seed data generation", () => {
     expect(referenceSql).toContain("INSERT INTO venue");
     expect(referenceSql).toContain("ON CONFLICT (id) DO UPDATE SET");
     expect(fixtureSql).toContain("INSERT OR IGNORE INTO performance");
+  });
+
+  test("reference seed upserts can target logical unique constraints", () => {
+    const schema = seedSchema({
+      tables: {
+        ...seedSchema().tables,
+        product: {
+          ...seedSchema().tables.product,
+          sku: col({ required: true }),
+        },
+      },
+      constraints: {
+        product: {
+          unique_sku: {
+            kind: "unique",
+            fields: [{ table: "product", field: "sku", references: null }],
+            message: "SKU must be unique.",
+          },
+        },
+      },
+      seed: {
+        ...seedSchema().seed!,
+        reference: {
+          product: [
+            { sku: "demo-ticket", name: "Demo ticket", price_pence: 2500 },
+          ],
+        },
+      },
+    });
+
+    expect(validateSchema(schema)).toEqual([]);
+    expect(genSeedSQL(schema, "reference")).toContain("ON CONFLICT (sku) DO UPDATE SET");
   });
 
   test("runtime applies reference data and gates fixtures", async () => {

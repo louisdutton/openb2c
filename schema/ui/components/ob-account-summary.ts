@@ -6,7 +6,7 @@ import { displayName, escapeAttr, escapeHtml, fieldDisplayLabel, fieldFormat, fi
 import { stylesheetLink } from "../style-link";
 
 const INTERNAL_PREFIXES = ["identity_", "api_key"];
-const PROFILE_EXCLUDED_FIELDS = new Set(["id", "email", "user_id", "created_at", "updated_at"]);
+const PROFILE_EXCLUDED_FIELDS = new Set(["id", "email", "user_id", "customer_type", "created_at", "updated_at"]);
 const PROFILE_FIELD_ORDER = ["name", "phone", "avatar_url"];
 const ACTIVITY_EXCLUDED_ENTITIES = new Set(["user"]);
 

@@ -164,9 +164,13 @@ in
     };
   };
 
-  indexes.material_version.unique_material_version = {
-    columns = [ "material_id" "version_label" ];
-    unique = true;
+  constraints.material_version.unique_material_version = {
+    kind = "unique";
+    fields = [
+      config.refs.material_version.material_id
+      config.refs.material_version.version_label
+    ];
+    message = "Material version labels must be unique per material.";
   };
 
   audit.entities.production_material = {

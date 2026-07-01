@@ -5,7 +5,7 @@ in
 {
   tables.project = {
     id = { type = "integer"; pk = true; auto = true; };
-    key = { type = "text"; required = true; unique = true; };  # e.g., "PROJ", "ENG"
+    key = { type = "text"; required = true; };  # e.g., "PROJ", "ENG"
     name = { type = "text"; required = true; };
     description = { type = "text"; };
     owner_id = {
@@ -19,6 +19,12 @@ in
     };
     status = { type = "text"; default = "'active'"; };  # active, archived
     created_at = { type = "text"; default = "CURRENT_TIMESTAMP"; };
+  };
+
+  constraints.project.unique_key = {
+    kind = "unique";
+    fields = [ config.refs.project.key ];
+    message = "Project key must be unique.";
   };
 
   operations.project = {

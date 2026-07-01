@@ -1,0 +1,10 @@
+version = 1
+name = "OpenB2C"
+
+[setup]
+script = ""
+
+[[actions]]
+name = "Run Duchy Opera"
+icon = "run"
+command = "nix develop --command bun scripts/run-duchyopera.ts"

@@ -410,9 +410,19 @@ describe("generated UI web components", () => {
     const publicStyles = genPublicStylesheet();
 
     const accountIndex = publicApp.indexOf("<ob-auth-menu></ob-auth-menu>");
-    const checkoutIndex = publicApp.indexOf('<button class="nav-button" type="button" data-action="checkout" hidden>Book tickets</button>');
+    const checkoutIndex = publicApp.indexOf('<button class="nav-button" type="button" data-action="commerce" hidden>Browse</button>');
     expect(accountIndex).toBeGreaterThan(-1);
     expect(checkoutIndex).toBeGreaterThan(accountIndex);
+    expect(publicApp).toContain("commerceActionLabel(api, catalogEntity)");
+    expect(publicApp).toContain("return \"What's on\";");
+    expect(publicApp).toContain("return `Browse ${pluralDisplayName(catalogEntity)}`;");
+    expect(commerceComponent).toContain('class="catalog-section"');
+    expect(commerceComponent).toContain("this._renderItemMedia(first, key)");
+    expect(commerceComponent).toContain("this._cardTemporalLabel(items, config)");
+    expect(commerceComponent).toContain("temporalSortValue");
+    expect(commerceComponent).toContain("Select ${escapeHtml(this._itemTitle(item, config, lookups))}");
+    expect(commerceComponent).not.toContain("data.selectedGroup");
+    expect(commerceComponent).not.toContain("data.selectedItemId");
 
     const changeDetailsIndex = commerceComponent.indexOf('data-action="back-to-variants"');
     const addToCartIndex = commerceComponent.indexOf('type="submit" class="primary">Add to cart</button>');

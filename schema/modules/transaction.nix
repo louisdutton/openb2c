@@ -22,6 +22,12 @@ in
     created_at = { type = "text"; default = "CURRENT_TIMESTAMP"; };
   };
 
+  constraints.transaction.unique_reference = {
+    kind = "unique";
+    fields = [ config.refs.transaction.reference ];
+    message = "Transaction reference must be unique.";
+  };
+
   # Link tickets to transactions
   tables.transaction_ticket = {
     id = { type = "integer"; pk = true; auto = true; };
@@ -43,9 +49,13 @@ in
     };
   };
 
-  indexes.transaction_ticket.unique_pair = {
-    columns = [ "transaction_id" "ticket_id" ];
-    unique = true;
+  constraints.transaction_ticket.unique_pair = {
+    kind = "unique";
+    fields = [
+      config.refs.transaction_ticket.transaction_id
+      config.refs.transaction_ticket.ticket_id
+    ];
+    message = "A ticket can only appear once in the same transaction.";
   };
 
   workflows.groups.paymentLifecycle = {

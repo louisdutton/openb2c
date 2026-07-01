@@ -19,9 +19,9 @@ in {
   organization = modules.config.organization;
   integrations = modules.config.integrations;
   tables = modules.config.tables;
-  indexes = modules.config.indexes;
   refs = modules.config.refs;
   relationships = modules.config.relationships;
+  constraints = modules.config.constraints;
   operations = composeLib.processOperations modules.config.tables modules.config.relationships modules.config.operations;
   ecommerce = modules.config.ecommerce;
 }

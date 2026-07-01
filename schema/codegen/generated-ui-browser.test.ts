@@ -37,12 +37,15 @@ describe("generated UI browser automation", () => {
 
     try {
       await page.goto(`${staticApp.baseUrl}/index.html#/commerce`, { waitUntil: "domcontentloaded" });
-      await page.getByRole("heading", { name: "Checkout" }).waitFor();
-      await page.getByRole("heading", { name: "Choose Performance" }).waitFor();
+      await page.getByRole("heading", { name: "Performances" }).waitFor();
+      await page.getByRole("button", { name: "What's on" }).waitFor();
+      await page.getByText(/27 Jun 2026.*19:30/).waitFor();
+      expect(await page.getByRole("heading", { name: "Available Performances" }).count()).toBe(0);
 
       await page.getByRole("button", { name: /The Magic Flute/ }).click();
-      await page.getByRole("heading", { name: "Choose details" }).waitFor();
+      await page.getByRole("heading", { name: "The Magic Flute" }).waitFor();
       await page.getByRole("button", { name: /27 Jun 2026.*19:30.*Hall for Cornwall/ }).click();
+      await page.getByRole("heading", { name: "Select The Magic Flute" }).waitFor();
 
       await page.getByLabel("Seat").fill("A1");
       await page.getByLabel("Ticket type").selectOption("patron");

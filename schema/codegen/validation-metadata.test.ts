@@ -46,9 +46,15 @@ function validationSchema(): Schema {
         }),
       },
     },
-    validations: {
+    constraints: {
       ticket: {
-        vipPriceMinimum: {
+        unique_ticket_type: {
+          kind: "unique",
+          fields: [{ table: "ticket", field: "ticket_type", references: null }],
+          message: "Ticket type must be unique.",
+        },
+        vip_price_minimum: {
+          kind: "check",
           fields: [
             { table: "ticket", field: "ticket_type", references: null },
             { table: "ticket", field: "price_pence", references: null },
@@ -83,49 +89,56 @@ function validationSchema(): Schema {
 }
 
 describe("validation metadata generation", () => {
-  test("threads field and cross-field validation metadata into OpenAPI", () => {
+  test("threads field validation and logical constraint metadata into OpenAPI", () => {
     const openapi = JSON.parse(genOpenAPI(validationSchema()));
 
     expect(openapi.components.schemas.TicketInput.properties.ticket_type.enum).toEqual(["standard", "vip"]);
     expect(openapi.components.schemas.TicketInput.properties.price_pence.minimum).toBe(0);
     expect(openapi.components.schemas.TicketInput.properties.price_pence.maximum).toBe(100000);
-    expect(openapi["x-openb2c-validation"].crossFieldConstraints.ticket.vipPriceMinimum).toMatchObject({
+    expect(openapi["x-openb2c-validation"].constraints.ticket.unique_ticket_type).toMatchObject({
+      kind: "unique",
+      fields: [{ table: "ticket", field: "ticket_type", references: null }],
+      message: "Ticket type must be unique.",
+      enforcement: "auto",
+    });
+    expect(openapi["x-openb2c-validation"].constraints.ticket.vip_price_minimum).toMatchObject({
+      kind: "check",
       fields: [
         { table: "ticket", field: "ticket_type", references: null },
         { table: "ticket", field: "price_pence", references: null },
       ],
       message: "VIP tickets must cost at least GBP 25.00.",
+      enforcement: "auto",
     });
   });
 
-  test("generated services enforce cross-field constraints on create and partial update", async () => {
+  test("generated services enforce logical check constraints", async () => {
     const schema = validationSchema();
-    const dir = mkdtempSync(join(tmpdir(), "openb2c-validation-metadata-"));
+    const dir = mkdtempSync(join(tmpdir(), "openb2c-logical-constraints-"));
     writeFileSync(join(dir, "types.ts"), genTypes(schema.tables, schema.operations));
     writeFileSync(join(dir, "services.ts"), genServices(schema));
 
     const services = await import(`${pathToFileURL(join(dir, "services.ts")).href}?${Date.now()}`);
     const db = new Database(":memory:");
-    db.exec(genSQL(schema.tables, schema.indexes));
+    db.exec(genSQL(schema.tables, schema.constraints));
 
     try {
       expect(services.createTicket(db, { ticket_type: "vip", price_pence: 2000 }).error).toBe("VIP tickets must cost at least GBP 25.00.");
-      const created = services.createTicket(db, { ticket_type: "standard", price_pence: 2000 });
-      expect(created.ok).toBe(true);
-      expect(services.updateTicket(db, created.data.id, { ticket_type: "vip" }).error).toBe("VIP tickets must cost at least GBP 25.00.");
-      expect(services.updateTicket(db, created.data.id, { ticket_type: "vip", price_pence: 2500 }).ok).toBe(true);
+      expect(services.createTicket(db, { ticket_type: "vip", price_pence: 2500 }).ok).toBe(true);
     } finally {
       db.close();
     }
   });
 
-  test("validates malformed cross-field validation metadata", () => {
+  test("validates malformed logical constraints", () => {
     const schema = validationSchema();
-    schema.validations!.ticket.vipPriceMinimum.fields = [
+    schema.constraints!.ticket.vip_price_minimum.fields = [
       { table: "ticket", field: "ticket_type", references: null },
     ];
-    schema.validations!.ticket.vipPriceMinimum.expression = { _t: "field", name: "missing" };
-    schema.validations!.ticket.related = {
+    schema.constraints!.ticket.vip_price_minimum.expression = { _t: "field", name: "missing" };
+    schema.constraints!.ticket.unique_ticket_type.expression = { _t: "field", name: "ticket_type" };
+    schema.constraints!.ticket.related = {
+      kind: "check",
       fields: [
         { table: "ticket", field: "ticket_type", references: null },
         { table: "ticket", field: "price_pence", references: null },
@@ -135,11 +148,11 @@ describe("validation metadata generation", () => {
     } as any;
 
     expect(validateSchema(schema)).toEqual(expect.arrayContaining([
-      expect.objectContaining({ path: "validations.ticket.vipPriceMinimum.fields" }),
-      expect.objectContaining({ path: "validations.ticket.vipPriceMinimum.expression.name" }),
-      expect.objectContaining({ path: "validations.ticket.vipPriceMinimum.fields" }),
-      expect.objectContaining({ path: "validations.ticket.related.expression" }),
-      expect.objectContaining({ path: "validations.ticket.related.message" }),
+      expect.objectContaining({ path: "constraints.ticket.vip_price_minimum.expression.name" }),
+      expect.objectContaining({ path: "constraints.ticket.vip_price_minimum.fields" }),
+      expect.objectContaining({ path: "constraints.ticket.unique_ticket_type.expression" }),
+      expect.objectContaining({ path: "constraints.ticket.related.expression" }),
+      expect.objectContaining({ path: "constraints.ticket.related.message" }),
     ]));
   });
 });

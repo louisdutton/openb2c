@@ -76,7 +76,8 @@ in
     };
   };
 
-  validations.performance.endsAfterStart = {
+  constraints.performance.ends_after_start = {
+    kind = "check";
     fields = [
       config.refs.performance.starts_at
       config.refs.performance.ends_at
@@ -113,9 +114,13 @@ in
     role_in_performance = { type = "text"; };  # Character name or role
   };
 
-  indexes.performance_artist.unique_pair = {
-    columns = [ "performance_id" "user_id" ];
-    unique = true;
+  constraints.performance_artist.unique_pair = {
+    kind = "unique";
+    fields = [
+      config.refs.performance_artist.performance_id
+      config.refs.performance_artist.user_id
+    ];
+    message = "An artist can only be assigned once to the same performance.";
   };
 
   workflows.groups.performanceLifecycle = {

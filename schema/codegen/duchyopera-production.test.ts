@@ -55,9 +55,9 @@ describe("Duchy Opera production backend", () => {
     expect(schema.tables.artist_profile.user_id).toMatchObject({
       type: "integer",
       required: true,
-      unique: true,
       references: "user(id)",
     });
+    expect(schema.constraints?.artist_profile?.unique_user).toBeDefined();
     expect(schema.tables.production_member.user_id.references).toBe("user(id)");
     expect(schema.tables.rehearsal_call.user_id.references).toBe("user(id)");
     expect(schema.tables.production.opens_on).toBeUndefined();
@@ -95,7 +95,7 @@ describe("Duchy Opera production backend", () => {
 
   test("generates backend contracts for production scheduling", async () => {
     const schema = await loadDuchyOperaSchema();
-    const sql = genSQL(schema.tables, schema.indexes);
+    const sql = genSQL(schema.tables, schema.constraints);
     const openapi = JSON.parse(genOpenAPI(schema));
 
     expect(sql).toContain("CREATE TABLE IF NOT EXISTS production");

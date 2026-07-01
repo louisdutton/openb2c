@@ -1,4 +1,4 @@
-import type { Column, DerivedField, EcommerceConfig, FieldRef, Operation, Schema, Tables } from "./types";
+import type { Column, Constraint, DerivedField, EcommerceConfig, FieldRef, Operation, Schema, Tables } from "./types";
 import { pascalCase, camelCase, getEcommerceConfig, hasCommerceWorkflow, hasCommerceBookingAliases } from "./utils";
 import { compileExpr, extractRelations } from "./expr";
 
@@ -232,16 +232,28 @@ function isFutureTemporalField(field: string, column: Column): boolean {
 
 function crossFieldValidationCases(schema: Schema): string {
   const cases: string[] = [];
-  for (const [entity, constraints] of Object.entries(schema.validations || {})) {
-    const checks: string[] = [];
+  const checksByEntity: Record<string, string[]> = {};
+
+  for (const [entity, constraints] of Object.entries(schema.constraints || {})) {
     for (const constraint of Object.values(constraints)) {
-      checks.push(`    if (!(${compileExpr(constraint.expression, "record")})) return ${JSON.stringify(constraint.message)};`);
-    }
-    if (checks.length > 0) {
-      cases.push(`    case ${JSON.stringify(entity)}:\n${checks.join("\n")}\n      return null;`);
+      if (!applicationCheckConstraint(constraint)) continue;
+      checksByEntity[entity] ||= [];
+      const expression = compileExpr(constraint.expression!, "record");
+      const condition = constraint.condition ? compileExpr(constraint.condition, "record") : "";
+      const predicate = condition ? `(!(${condition}) || (${expression}))` : `(${expression})`;
+      checksByEntity[entity].push(`    if (!(${predicate})) return ${JSON.stringify(constraint.message || "Constraint failed.")};`);
     }
   }
+
+  for (const [entity, checks] of Object.entries(checksByEntity)) {
+    if (checks.length > 0) cases.push(`    case ${JSON.stringify(entity)}:\n${checks.join("\n")}\n      return null;`);
+  }
   return cases.join("\n");
+}
+
+function applicationCheckConstraint(constraint: Constraint): boolean {
+  if (constraint.kind !== "check" || !constraint.expression) return false;
+  return constraint.enforcement !== "database";
 }
 
 function templateExpression(template: string): string {

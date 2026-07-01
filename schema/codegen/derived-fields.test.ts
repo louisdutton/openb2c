@@ -131,7 +131,7 @@ describe("derived field generation", () => {
 
     const services = await import(`${pathToFileURL(join(dir, "services.ts")).href}?${Date.now()}`);
     const db = new Database(":memory:");
-    db.exec(genSQL(schema.tables, schema.indexes));
+    db.exec(genSQL(schema.tables, schema.constraints));
 
     try {
       const created = services.createTicket(db, {

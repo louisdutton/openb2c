@@ -78,7 +78,7 @@ export class ObAuthPanel extends HTMLElement {
     this.shadowRoot!.innerHTML = `
       ${stylesheetLink()}
 
-      <section class="auth-panel" aria-label="Account">
+      <section class="auth-panel" aria-label="${signedIn ? "Session" : "Account"}">
         ${showHeader ? `<div class="panel-header">
           <div>
             <div class="panel-title">Account</div>
@@ -112,7 +112,7 @@ export class ObAuthPanel extends HTMLElement {
     return `
       <div class="session">
         <div class="session-box">
-          <strong>Signed in</strong>
+          <strong>Session</strong>
           <span>User #${escapeHtml(userId)}</span>
         </div>
         <div class="actions">

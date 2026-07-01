@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { sqlType, genSQL } from "./sql";
 import type { Column } from "./types";
-import type { Indexes, Tables } from "./types";
+import type { Constraints, Tables } from "./types";
 
 describe("sqlType", () => {
   const baseCol: Column = {
@@ -150,7 +150,7 @@ describe("genSQL", () => {
     expect(sql).toContain("CREATE TABLE IF NOT EXISTS [order]");
   });
 
-  test("generates indexes from schema metadata", () => {
+  test("infers operational lookup indexes from table shape", () => {
     const tables: Tables = {
       ticket: {
         id: { type: "integer", pk: true, auto: true, required: false, unique: false, default: null, references: null },
@@ -161,20 +161,93 @@ describe("genSQL", () => {
         id: { type: "integer", pk: true, auto: true, required: false, unique: false, default: null, references: null },
       },
     };
-    const indexes: Indexes = {
-      ticket: {
-        by_user_status: { columns: ["user_id", "status"], unique: false },
-        unique_user_status: { columns: ["user_id", "status"], unique: true },
-      },
-    };
 
-    const sql = genSQL(tables, indexes);
+    const sql = genSQL(tables);
     expect(sql).toContain("CREATE INDEX IF NOT EXISTS ticket_by_user_status ON ticket (user_id, status);");
-    expect(sql).toContain("CREATE UNIQUE INDEX IF NOT EXISTS ticket_unique_user_status ON ticket (user_id, status);");
     expect(sql.indexOf("CREATE TABLE IF NOT EXISTS ticket")).toBeLessThan(sql.indexOf("CREATE INDEX IF NOT EXISTS ticket_by_user_status"));
   });
 
-  test("validates index table and column references", () => {
+  test("generates database constraints from logical declarations", () => {
+    const tables: Tables = {
+      ticket: {
+        id: { type: "integer", pk: true, auto: true, required: false, unique: false, default: null, references: null },
+        performance_id: { type: "integer", pk: false, auto: false, required: true, unique: false, default: null, references: null },
+        seat: { type: "text", pk: false, auto: false, required: false, unique: false, default: null, references: null },
+        ticket_type: { type: "text", pk: false, auto: false, required: false, unique: false, default: "'standard'", references: null },
+        price_pence: { type: "integer", pk: false, auto: false, required: true, unique: false, default: null, references: null },
+      },
+    };
+    const constraints: Constraints = {
+      ticket: {
+        unique_performance_seat: {
+          kind: "unique",
+          fields: [
+            { table: "ticket", field: "performance_id", references: null },
+            { table: "ticket", field: "seat", references: null },
+          ],
+          message: "Seat must be unique per performance.",
+        },
+        vip_price_minimum: {
+          kind: "check",
+          fields: [
+            { table: "ticket", field: "ticket_type", references: null },
+            { table: "ticket", field: "price_pence", references: null },
+          ],
+          expression: {
+            _t: "bin",
+            op: "||",
+            left: {
+              _t: "bin",
+              op: "!=",
+              left: { _t: "field", name: "ticket_type" },
+              right: { _t: "lit", value: "vip" },
+            },
+            right: {
+              _t: "bin",
+              op: ">=",
+              left: { _t: "field", name: "price_pence" },
+              right: { _t: "lit", value: 2500 },
+            },
+          },
+          message: "VIP tickets must cost at least GBP 25.00.",
+        },
+      },
+    };
+
+    const sql = genSQL(tables, constraints);
+    expect(sql).toContain("CONSTRAINT ticket_vip_price_minimum CHECK (((ticket_type != 'vip') OR (price_pence >= 2500)))");
+    expect(sql).toContain("CREATE UNIQUE INDEX IF NOT EXISTS ticket_unique_performance_seat ON ticket (performance_id, seat);");
+  });
+
+  test("supports partial unique constraints", () => {
+    const tables: Tables = {
+      booking: {
+        id: { type: "integer", pk: true, auto: true, required: false, unique: false, default: null, references: null },
+        payment_reference: { type: "text", pk: false, auto: false, required: false, unique: false, default: null, references: null },
+        status: { type: "text", pk: false, auto: false, required: false, unique: false, default: "'pending'", references: null },
+      },
+    };
+    const constraints: Constraints = {
+      booking: {
+        unique_paid_reference: {
+          kind: "unique",
+          fields: [{ table: "booking", field: "payment_reference", references: null }],
+          condition: {
+            _t: "bin",
+            op: "==",
+            left: { _t: "field", name: "status" },
+            right: { _t: "lit", value: "paid" },
+          },
+        },
+      },
+    };
+
+    expect(genSQL(tables, constraints)).toContain(
+      "CREATE UNIQUE INDEX IF NOT EXISTS booking_unique_paid_reference ON booking (payment_reference) WHERE (status = 'paid');"
+    );
+  });
+
+  test("validates constraint table and column references", () => {
     const tables: Tables = {
       ticket: {
         id: { type: "integer", pk: true, auto: true, required: false, unique: false, default: null, references: null },
@@ -183,14 +256,20 @@ describe("genSQL", () => {
 
     expect(() => genSQL(tables, {
       missing: {
-        by_id: { columns: ["id"], unique: false },
+        unique_id: {
+          kind: "unique",
+          fields: [{ table: "missing", field: "id", references: null }],
+        },
       },
-    })).toThrow("Index configured for non-existent table: missing");
+    })).toThrow("Constraint configured for non-existent table: missing");
 
     expect(() => genSQL(tables, {
       ticket: {
-        by_missing: { columns: ["missing_id"], unique: false },
+        unique_missing: {
+          kind: "unique",
+          fields: [{ table: "ticket", field: "missing_id", references: null }],
+        },
       },
-    })).toThrow("Index by_missing on ticket references non-existent column: missing_id");
+    })).toThrow("Constraint unique_missing on ticket references non-existent column: missing_id");
   });
 });

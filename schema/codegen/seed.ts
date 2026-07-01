@@ -16,7 +16,7 @@ export function genSeedSQL(schema: Schema, kind: SeedKind): string {
     const columns = schema.tables[table];
     if (!columns) continue;
     for (const row of rows) {
-      stmts.push(genSeedInsert(table, columns, row, kind));
+      stmts.push(genSeedInsert(schema, table, columns, row, kind));
     }
   }
   return stmts.length ? stmts.join("\n") + "\n" : "";
@@ -54,7 +54,7 @@ function hasOwn(row: Record<string, SeedValue>, field: string): boolean {
   return Object.prototype.hasOwnProperty.call(row, field);
 }
 
-function conflictColumns(columns: Record<string, Column>, row: Record<string, SeedValue>): string[] {
+function conflictColumns(schema: Schema, table: string, columns: Record<string, Column>, row: Record<string, SeedValue>): string[] {
   const primaryKey = Object.entries(columns)
     .filter(([field, column]) => column.pk && hasOwn(row, field))
     .map(([field]) => field);
@@ -62,10 +62,20 @@ function conflictColumns(columns: Record<string, Column>, row: Record<string, Se
 
   const unique = Object.entries(columns)
     .find(([field, column]) => column.unique && hasOwn(row, field));
-  return unique ? [unique[0]] : [];
+  if (unique) return [unique[0]];
+
+  for (const constraint of Object.values(schema.constraints?.[table] || {})) {
+    if (constraint.kind !== "unique" || constraint.condition || constraint.enforcement === "application") continue;
+    const fields = constraint.fields.filter(field => field.table === table).map(field => field.field);
+    if (fields.length > 0 && fields.length === constraint.fields.length && fields.every(field => hasOwn(row, field))) {
+      return fields;
+    }
+  }
+
+  return [];
 }
 
-function genSeedInsert(table: string, tableColumns: Record<string, Column>, row: Record<string, SeedValue>, kind: SeedKind): string {
+function genSeedInsert(schema: Schema, table: string, tableColumns: Record<string, Column>, row: Record<string, SeedValue>, kind: SeedKind): string {
   const columns = Object.keys(tableColumns).filter(field => hasOwn(row, field));
   const columnSql = columns.map(quoteReserved).join(", ");
   const valueSql = columns.map(field => sqlLiteral(row[field])).join(", ");
@@ -75,7 +85,7 @@ function genSeedInsert(table: string, tableColumns: Record<string, Column>, row:
     return `INSERT OR IGNORE INTO ${tableName} (${columnSql}) VALUES (${valueSql});`;
   }
 
-  const conflict = conflictColumns(tableColumns, row);
+  const conflict = conflictColumns(schema, table, tableColumns, row);
   if (conflict.length === 0) {
     return `INSERT OR IGNORE INTO ${tableName} (${columnSql}) VALUES (${valueSql});`;
   }

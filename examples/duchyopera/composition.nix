@@ -317,10 +317,9 @@ in {
   workflows = modules.config.workflows;
   tables = modules.config.tables;
   derived = modules.config.derived;
-  indexes = modules.config.indexes;
   refs = modules.config.refs;
   relationships = modules.config.relationships;
-  validations = modules.config.validations;
+  constraints = modules.config.constraints;
   operations = composeLib.processOperations modules.config.tables modules.config.relationships modules.config.operations;
   ecommerce = modules.config.ecommerce;
 }

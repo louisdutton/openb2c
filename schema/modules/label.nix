@@ -41,9 +41,13 @@ in
     created_at = { type = "text"; default = "CURRENT_TIMESTAMP"; };
   };
 
-  indexes.issue_label.unique_pair = {
-    columns = [ "issue_id" "label_id" ];
-    unique = true;
+  constraints.issue_label.unique_pair = {
+    kind = "unique";
+    fields = [
+      config.refs.issue_label.issue_id
+      config.refs.issue_label.label_id
+    ];
+    message = "A label can only be applied once to the same issue.";
   };
 
   operations.label = { };

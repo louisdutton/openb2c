@@ -39,7 +39,6 @@ const newIndexes: Indexes = {
 const schema: Schema = {
   organization: DEFAULT_ORGANIZATION_METADATA,
   tables: newTables,
-  indexes: newIndexes,
   operations: {},
 };
 
@@ -52,7 +51,7 @@ function applySql(db: Database, sql: string) {
 function writeGenerated(): string {
   const dir = mkdtempSync(join(tmpdir(), "openb2c-migration-"));
   mkdirSync(join(dir, "migrations"));
-  writeFileSync(join(dir, "schema.sql"), genSQL(newTables, newIndexes));
+  writeFileSync(join(dir, "schema.sql"), genSQL(newTables));
   writeFileSync(join(dir, "types.ts"), genTypes(newTables, schema.operations));
   writeFileSync(join(dir, "services.ts"), genServices(schema));
   writeFileSync(join(dir, "runtime.ts"), genRuntime(schema));

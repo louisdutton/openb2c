@@ -46,7 +46,7 @@ async function loadDuchyOperaSchema(): Promise<Schema> {
 
 function writeGenerated(schema: Schema, prefix: string): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
-  writeFileSync(join(dir, "schema.sql"), genSQL(schema.tables, schema.indexes));
+  writeFileSync(join(dir, "schema.sql"), genSQL(schema.tables, schema.constraints));
   writeFileSync(join(dir, "types.ts"), genTypes(schema.tables, schema.operations));
   writeFileSync(join(dir, "services.ts"), genServices(schema));
   writeFileSync(join(dir, "runtime.ts"), genRuntime(schema));
@@ -56,7 +56,7 @@ function writeGenerated(schema: Schema, prefix: string): string {
 }
 
 function applySql(db: Database, schema: Schema) {
-  for (const stmt of genSQL(schema.tables, schema.indexes).split(/;\s*\n/).filter(s => s.trim())) db.run(stmt);
+  for (const stmt of genSQL(schema.tables, schema.constraints).split(/;\s*\n/).filter(s => s.trim())) db.run(stmt);
 }
 
 function seedDuchyOpera(dbPath: string) {

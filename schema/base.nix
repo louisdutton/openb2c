@@ -585,20 +585,36 @@ let
 
   relationshipSpecType = lib.types.either lib.types.str relationshipType;
 
-  crossFieldValidationType = lib.types.submodule {
+  constraintType = lib.types.submodule {
     options = {
+      kind = lib.mkOption {
+        type = lib.types.enum [ "unique" "check" ];
+        description = "Logical constraint kind. Unique constraints protect identity/cardinality; check constraints protect row invariants.";
+      };
       fields = lib.mkOption {
         type = lib.types.listOf fieldRefType;
         default = [];
         description = "Structured local field references covered by this constraint.";
       };
       expression = lib.mkOption {
-        type = lib.types.attrs;
-        description = "Boolean expression AST that must evaluate truthy for a valid record.";
+        type = lib.types.nullOr lib.types.attrs;
+        default = null;
+        description = "Boolean expression AST for check constraints.";
+      };
+      condition = lib.mkOption {
+        type = lib.types.nullOr lib.types.attrs;
+        default = null;
+        description = "Optional Boolean expression AST limiting when the constraint applies.";
       };
       message = lib.mkOption {
-        type = lib.types.str;
-        description = "Human-readable validation error shown when the expression fails.";
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = "Human-readable validation error shown when the constraint fails.";
+      };
+      enforcement = lib.mkOption {
+        type = lib.types.enum [ "auto" "database" "application" "both" ];
+        default = "auto";
+        description = "Preferred enforcement layer. Auto chooses database for unique and both database/application for checks.";
       };
     };
   };
@@ -773,20 +789,6 @@ let
           };
         };
         default = {};
-      };
-    };
-  };
-
-  indexType = lib.types.submodule {
-    options = {
-      columns = lib.mkOption {
-        type = lib.types.listOf lib.types.str;
-        description = "Columns covered by the index, in order.";
-      };
-      unique = lib.mkOption {
-        type = lib.types.bool;
-        default = false;
-        description = "Whether this index enforces uniqueness.";
       };
     };
   };
@@ -1081,16 +1083,10 @@ in {
       description = "Record relationship definitions per entity.";
     };
 
-    validations = lib.mkOption {
-      type = lib.types.attrsOf (lib.types.attrsOf crossFieldValidationType);
+    constraints = lib.mkOption {
+      type = lib.types.attrsOf (lib.types.attrsOf constraintType);
       default = {};
-      description = "Cross-field validation constraints per entity.";
-    };
-
-    indexes = lib.mkOption {
-      type = lib.types.attrsOf (lib.types.attrsOf indexType);
-      default = {};
-      description = "Database indexes per table.";
+      description = "Logical data constraints per entity. Generators allocate enforcement to database and/or application layers.";
     };
 
     operations = lib.mkOption {

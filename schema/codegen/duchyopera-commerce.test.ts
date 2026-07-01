@@ -42,7 +42,7 @@ async function loadDuchyOperaSchema(): Promise<Schema> {
 
 function writeGenerated(schema: Schema): string {
   const dir = mkdtempSync(join(tmpdir(), "openb2c-duchy-commerce-"));
-  writeFileSync(join(dir, "schema.sql"), genSQL(schema.tables, schema.indexes));
+  writeFileSync(join(dir, "schema.sql"), genSQL(schema.tables, schema.constraints));
   writeFileSync(join(dir, "types.ts"), genTypes(schema.tables, schema.operations));
   writeFileSync(join(dir, "services.ts"), genServices(schema));
   writeFileSync(join(dir, "runtime.ts"), genRuntime(schema));
@@ -563,7 +563,7 @@ describe("Duchy Opera commerce workflow", () => {
     process.env.PAYMENT_PROVIDER = "fake";
 
     try {
-      for (const stmt of genSQL(schema.tables, schema.indexes).split(/;\s*\n/).filter(s => s.trim())) db.run(stmt);
+      for (const stmt of genSQL(schema.tables, schema.constraints).split(/;\s*\n/).filter(s => s.trim())) db.run(stmt);
       db.close();
       db = null;
       seedDuchyOpera(dbPath);

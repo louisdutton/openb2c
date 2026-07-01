@@ -79,12 +79,17 @@ in
     };
   };
 
-  indexes.ticket.unique_performance_seat = {
-    columns = [ "performance_id" "seat" ];
-    unique = true;
+  constraints.ticket.unique_performance_seat = {
+    kind = "unique";
+    fields = [
+      config.refs.ticket.performance_id
+      config.refs.ticket.seat
+    ];
+    message = "Seat must be unique per performance.";
   };
 
-  validations.ticket.vipPriceMinimum = {
+  constraints.ticket.vip_price_minimum = {
+    kind = "check";
     fields = [
       config.refs.ticket.ticket_type
       config.refs.ticket.price_pence
