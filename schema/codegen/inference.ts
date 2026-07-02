@@ -77,9 +77,24 @@ export function inferCommerce(schema: Schema): CommerceInference {
   if (!schema.commerce?.enabled) return { config: null, diagnostics: [] };
 
   const diagnostics: InferenceDiagnostic[] = [];
-  const order = chooseOne("commerce.inference.order", diagnostics, Object.keys(schema.tables).filter((entity) => isOrder(schema, entity)));
-  const transaction = chooseOne("commerce.inference.transaction", diagnostics, Object.keys(schema.tables).filter((entity) => isTransaction(schema, entity)));
-  const lineItem = chooseOne("commerce.inference.lineItem", diagnostics, Object.keys(schema.tables).filter((entity) => isLineItem(schema, entity)));
+  const order = chooseOne(
+    "commerce.inference.order",
+    diagnostics,
+    Object.keys(schema.tables).filter((entity) => isOrder(schema, entity)),
+    "expected exactly one table with a user FK, checkout_pending/paid/expired/cancelled status enum, amount_pence, currency, expires_at, and payment_reference",
+  );
+  const transaction = chooseOne(
+    "commerce.inference.transaction",
+    diagnostics,
+    Object.keys(schema.tables).filter((entity) => isTransaction(schema, entity)),
+    "expected exactly one table with a user FK, pending/completed/failed status enum, money amount, and reference/payment_reference field",
+  );
+  const lineItem = chooseOne(
+    "commerce.inference.lineItem",
+    diagnostics,
+    Object.keys(schema.tables).filter((entity) => isLineItem(schema, entity)),
+    "expected exactly one table with reserved/cancelled status enum, price_pence, and an FK to a purchasable catalog entity",
+  );
 
   if (!order || !transaction || !lineItem) return { config: null, diagnostics };
 
@@ -89,12 +104,23 @@ export function inferCommerce(schema: Schema): CommerceInference {
     foreignKeys(schema, lineItem)
       .filter((fk) => !["user", order, transaction].includes(fk.target.table))
       .filter((fk) => moneyField(schema, fk.target.table, ["price_pence", "amount_pence"])),
+    "expected exactly one non-user FK from the line item to an entity with a money/price field",
   );
   if (!catalogItem) return { config: null, diagnostics };
 
   const catalog = catalogItem.target.table;
-  const orderLine = chooseOne("commerce.inference.orderLine", diagnostics, Object.keys(schema.tables).filter((entity) => hasFkTo(schema, entity, order) && hasFkTo(schema, entity, lineItem)));
-  const transactionLine = chooseOne("commerce.inference.transactionLine", diagnostics, Object.keys(schema.tables).filter((entity) => hasFkTo(schema, entity, transaction) && hasFkTo(schema, entity, lineItem)));
+  const orderLine = chooseOne(
+    "commerce.inference.orderLine",
+    diagnostics,
+    Object.keys(schema.tables).filter((entity) => hasFkTo(schema, entity, order) && hasFkTo(schema, entity, lineItem)),
+    "expected exactly one bridge table with FKs to the inferred order and line item entities",
+  );
+  const transactionLine = chooseOne(
+    "commerce.inference.transactionLine",
+    diagnostics,
+    Object.keys(schema.tables).filter((entity) => hasFkTo(schema, entity, transaction) && hasFkTo(schema, entity, lineItem)),
+    "expected exactly one bridge table with FKs to the inferred transaction and line item entities",
+  );
   if (!orderLine || !transactionLine) return { config: null, diagnostics };
 
   const catalogPrice = moneyField(schema, catalog, ["price_pence"]);
@@ -209,13 +235,13 @@ export function inferCommerceConfig(schema: Schema): InferredCommerceConfig | nu
   return inference.config;
 }
 
-function chooseOne<T>(path: string, diagnostics: InferenceDiagnostic[], candidates: T[]): T | null {
+function chooseOne<T>(path: string, diagnostics: InferenceDiagnostic[], candidates: T[], criteria: string): T | null {
   if (candidates.length === 1) return candidates[0];
   diagnostics.push({
     path,
     message: candidates.length === 0
-      ? "could not infer a matching role"
-      : `is ambiguous: ${candidates.map(String).join(", ")}`,
+      ? `could not infer a matching role; ${criteria}`
+      : `is ambiguous: ${candidates.map(String).join(", ")}; ${criteria}`,
   });
   return null;
 }

@@ -30,9 +30,35 @@
             set -euo pipefail
 
             if [ $# -eq 0 ]; then
-              echo "Usage: compose <composition.nix>"
+              echo "Usage: compose [--explain[=md|json]] <composition.nix>"
               echo "Example: compose examples/duchyopera/composition.nix"
+              echo "         compose --explain examples/duchyopera/composition.nix"
               echo "         compose composition.nix (from within example dir)"
+              exit 1
+            fi
+
+            composition_path=""
+            explain_args=()
+            while [ $# -gt 0 ]; do
+              case "$1" in
+                --explain|--explain=*)
+                  explain_args+=("$1")
+                  ;;
+                *)
+                  if [[ -n "$composition_path" ]]; then
+                    echo "Error: Unexpected argument: $1"
+                    echo "Usage: compose [--explain[=md|json]] <composition.nix>"
+                    exit 1
+                  fi
+                  composition_path="$1"
+                  ;;
+              esac
+              shift
+            done
+
+            if [[ -z "$composition_path" ]]; then
+              echo "Error: Missing composition.nix"
+              echo "Usage: compose [--explain[=md|json]] <composition.nix>"
               exit 1
             fi
 
@@ -52,7 +78,6 @@
             fi
 
             # Convert composition path to absolute if relative
-            composition_path="$1"
             if [[ ! "$composition_path" = /* ]]; then
               composition_path="$PWD/$composition_path"
             fi
@@ -63,7 +88,7 @@
 
             # Run from project root
             cd "$project_root"
-            ${nix}/bin/nix eval --json -f "$composition_path" | ${bun}/bin/bun schema/codegen/index.ts "$output_dir"
+            ${nix}/bin/nix eval --json -f "$composition_path" | ${bun}/bin/bun schema/codegen/index.ts "$output_dir" "''${explain_args[@]}"
           '';
         in {
           default = mkShell {

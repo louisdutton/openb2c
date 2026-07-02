@@ -18,6 +18,7 @@ export { genRoutes } from "./server";
 export { genMcpServer } from "./mcp";
 export { genEffectsInterface } from "./effects";
 export { genOpenAPI } from "./openapi";
+export { buildInferenceReport, genInferenceJson, genInferenceMarkdown } from "./inference-report";
 export { genAdminAppShell, genAppShell, genPublicAppShell } from "./ui";
 export { genAdminStylesheet, genPublicStylesheet } from "./ui-styles";
 export { assertValidSchema, formatSchemaDiagnostics, validateSchema, SchemaValidationError } from "./validation";
@@ -34,6 +35,7 @@ import { genEffectsInterface } from "./effects";
 import { genRoutes } from "./server";
 import { genMcpServer } from "./mcp";
 import { genOpenAPI } from "./openapi";
+import { genInferenceJson, genInferenceMarkdown } from "./inference-report";
 import { genAdminAppShell, genPublicAppShell } from "./ui";
 import { genEnvExample } from "./config";
 import { genAdminStylesheet, genPublicStylesheet } from "./ui-styles";
@@ -54,6 +56,7 @@ if (import.meta.main) {
 
   // Accept output directory as first argument, default to src/generated for backward compatibility
   const outDir = Bun.argv[2] || join(import.meta.dir, "..", "..", "src", "generated");
+  const explainFormat = parseExplainFormat(Bun.argv.slice(3), process.env.OPENB2C_EXPLAIN);
   mkdirSync(outDir, { recursive: true });
 
   writeFileSync(join(outDir, "schema.sql"), genSQL(schema.tables, schema.constraints));
@@ -68,18 +71,20 @@ if (import.meta.main) {
   const openApiJson = genOpenAPI(schema);
   writeFileSync(join(outDir, "openapi.json"), openApiJson);
   writeFileSync(join(outDir, ".env.example"), genEnvExample(schema));
+  rmSync(join(outDir, "inference.json"), { force: true });
+  rmSync(join(outDir, "inference.md"), { force: true });
 
-  console.log(`wrote ${outDir}/schema.sql`);
-  console.log(`wrote ${outDir}/seed.sql`);
-  console.log(`wrote ${outDir}/fixtures.sql`);
-  console.log(`wrote ${outDir}/types.ts`);
-  console.log(`wrote ${outDir}/services.ts`);
-  console.log(`wrote ${outDir}/runtime.ts`);
-  console.log(`wrote ${outDir}/effects.ts`);
-  console.log(`wrote ${outDir}/server.ts`);
-  console.log(`wrote ${outDir}/mcp.ts`);
-  console.log(`wrote ${outDir}/openapi.json`);
-  console.log(`wrote ${outDir}/.env.example`);
+  logWrite(explainFormat, `${outDir}/schema.sql`);
+  logWrite(explainFormat, `${outDir}/seed.sql`);
+  logWrite(explainFormat, `${outDir}/fixtures.sql`);
+  logWrite(explainFormat, `${outDir}/types.ts`);
+  logWrite(explainFormat, `${outDir}/services.ts`);
+  logWrite(explainFormat, `${outDir}/runtime.ts`);
+  logWrite(explainFormat, `${outDir}/effects.ts`);
+  logWrite(explainFormat, `${outDir}/server.ts`);
+  logWrite(explainFormat, `${outDir}/mcp.ts`);
+  logWrite(explainFormat, `${outDir}/openapi.json`);
+  logWrite(explainFormat, `${outDir}/.env.example`);
 
   // Generate UI
   const uiDir = join(outDir, "ui");
@@ -133,12 +138,42 @@ if (import.meta.main) {
     process.exit(1);
   }
 
-  console.log(`wrote ${uiDir}/index.html`);
-  console.log(`wrote ${uiDir}/styles.css`);
-  console.log(`wrote ${uiDir}/app.js`);
-  console.log(`wrote ${adminUiDir}/index.html`);
-  console.log(`wrote ${adminUiDir}/styles.css`);
-  console.log(`wrote ${adminUiDir}/app.js`);
+  logWrite(explainFormat, `${uiDir}/index.html`);
+  logWrite(explainFormat, `${uiDir}/styles.css`);
+  logWrite(explainFormat, `${uiDir}/app.js`);
+  logWrite(explainFormat, `${adminUiDir}/index.html`);
+  logWrite(explainFormat, `${adminUiDir}/styles.css`);
+  logWrite(explainFormat, `${adminUiDir}/app.js`);
+
+  if (explainFormat) {
+    const report = explainFormat === "json" ? genInferenceJson(schema) : genInferenceMarkdown(schema);
+    process.stdout.write(report);
+  }
+}
+
+type ExplainFormat = "md" | "json" | null;
+
+function parseExplainFormat(args: string[], envValue: string | undefined): ExplainFormat {
+  const cliValue = args.find((arg) => arg === "--explain" || arg.startsWith("--explain="));
+  const rawValue = cliValue
+    ? cliValue.includes("=")
+      ? cliValue.slice(cliValue.indexOf("=") + 1)
+      : "md"
+    : envValue;
+  if (!rawValue) return null;
+
+  const normalized = rawValue.toLowerCase();
+  if (["1", "true", "md", "markdown"].includes(normalized)) return "md";
+  if (normalized === "json") return "json";
+
+  console.error(`Unknown inference report format: ${rawValue}`);
+  console.error("Use --explain, --explain=md, --explain=json, or OPENB2C_EXPLAIN=md|json.");
+  process.exit(1);
+}
+
+function logWrite(explainFormat: ExplainFormat, path: string): void {
+  if (explainFormat) return;
+  console.log(`wrote ${path}`);
 }
 
 function prepareUiSchema(schema: Schema, uiDir: string, adminUiDir: string): Schema {
