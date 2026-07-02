@@ -2,7 +2,7 @@
  * <ob-commerce> - Generated catalog, cart, checkout, and payment workflow.
  */
 import { ObApi } from "./ob-api";
-import { escapeAttr, escapeHtml, fieldLabel, formatTemporalRange, formatValue, labelFor, pluralDisplayName } from "../format";
+import { escapeAttr, escapeHtml, fieldLabel, formatTemporalRange, formatValue, labelFor, pluralDisplayName, statusClass } from "../format";
 import { collectionRoutePath } from "../route";
 import { stylesheetLink } from "../style-link";
 
@@ -33,7 +33,7 @@ type CommerceConfig = {
   order?: { entity?: string; user?: FieldRef | null };
   lineItem?: { entity?: string; options?: Record<string, CommerceOption> };
   transaction?: { entity?: string };
-  checkout?: { currency?: string; expiryMinutes?: number; maxQuantity?: number; maxLines?: number };
+  checkout?: { currency?: string; expiryMinutes?: number; paymentDeadlineMinutes?: number; maxQuantity?: number; maxLines?: number };
 };
 
 type CartLine = {
@@ -379,10 +379,11 @@ export class ObCommerce extends HTMLElement {
     }
     return `
       <section class="panel" aria-labelledby="review-title">
+        ${this._renderCheckoutProgress("cart")}
         <div class="panel-header">
           <div>
             <h2 id="review-title">Review cart</h2>
-            <p class="notice">${this._cart.length} line${this._cart.length === 1 ? "" : "s"} ready for checkout.</p>
+            <p class="notice">${this._cart.length} line${this._cart.length === 1 ? "" : "s"} ready to reserve.</p>
           </div>
           <span class="step">Checkout</span>
         </div>
@@ -390,7 +391,7 @@ export class ObCommerce extends HTMLElement {
         ${signedIn ? `
           <form data-form="checkout">
             <div class="actions">
-              <button type="submit" class="primary" ${this._loading ? "disabled" : ""}>${this._loading ? "Working" : "Checkout"}</button>
+              <button type="submit" class="primary" ${this._loading ? "disabled" : ""}>${this._loading ? "Reserving" : "Reserve and continue"}</button>
               <button type="button" data-action="add-another">Add another</button>
             </div>
           </form>
@@ -406,15 +407,20 @@ export class ObCommerce extends HTMLElement {
   }
 
   private _renderPaymentStep(): string {
+    const deadline = this._checkoutResult?.expires_at ? formatValue("expires_at", this._checkoutResult.expires_at) : "";
     return `
       <section class="panel" aria-labelledby="payment-title">
+        ${this._renderCheckoutProgress("reserved")}
         <div class="panel-header">
-          <h2 id="payment-title">Confirm payment</h2>
-          <span class="step">Payment</span>
+          <div>
+            <h2 id="payment-title">Payment details</h2>
+            ${deadline ? `<p class="notice">Reserved until ${escapeHtml(deadline)}.</p>` : ""}
+          </div>
+          <span class="step">Reserved</span>
         </div>
         ${this._renderCheckoutSummary()}
         <div class="actions">
-          <button type="button" class="primary" data-action="payment-session">Create payment session</button>
+          <button type="button" class="primary" data-action="payment-session">Continue to payment</button>
         </div>
       </section>
     `;
@@ -423,8 +429,12 @@ export class ObCommerce extends HTMLElement {
   private _renderProviderHandoffStep(): string {
     return `
       <section class="panel" aria-labelledby="provider-title">
+        ${this._renderCheckoutProgress("payment")}
         <div class="panel-header">
-          <h2 id="provider-title">Payment</h2>
+          <div>
+            <h2 id="provider-title">Complete payment</h2>
+            ${this._paymentSession?.payment_deadline_at ? `<p class="notice">Payment is held until ${escapeHtml(formatValue("payment_deadline_at", this._paymentSession.payment_deadline_at))}.</p>` : ""}
+          </div>
           <span class="step">Provider</span>
         </div>
         ${this._renderCheckoutSummary()}
@@ -440,9 +450,10 @@ export class ObCommerce extends HTMLElement {
     const cancelled = status === "cancelled";
     const refundRequired = status === "refund_required";
     const title = paid ? "Booking confirmed" : refundRequired ? "Payment needs review" : cancelled ? "Payment cancelled" : "Payment updated";
-    const receipt = paid ? "Queued" : "Not sent";
+    const receipt = paid ? "Receipt queued" : "Receipt not sent";
     return `
       <section class="panel" aria-labelledby="complete-title">
+        ${this._renderCheckoutProgress("complete")}
         <div class="panel-header">
           <h2 id="complete-title">${escapeHtml(title)}</h2>
           <span class="step">Complete</span>
@@ -450,10 +461,11 @@ export class ObCommerce extends HTMLElement {
         ${this._renderCheckoutSummary()}
         ${this._renderPaymentSummary()}
         <div class="summary">
-          <div class="summary-row"><span>Result</span><span>${escapeHtml(status || "-")}</span></div>
+          <div class="summary-row"><span>Result</span><span>${this._renderStatusPill(status || "-")}</span></div>
           <div class="summary-row"><span>Receipt</span><span>${escapeHtml(receipt)}</span></div>
         </div>
         <div class="actions">
+          ${paid ? `<a class="btn primary" href="#/account">View tickets</a>` : ""}
           <button type="button" data-action="start-over">Start another order</button>
         </div>
       </section>
@@ -633,23 +645,51 @@ export class ObCommerce extends HTMLElement {
     `;
   }
 
-  private _renderCheckoutSummary(): string {
+  private _renderCheckoutProgress(current: "cart" | "reserved" | "payment" | "complete"): string {
+    const steps = [
+      ["cart", "Cart"],
+      ["reserved", "Reserved"],
+      ["payment", "Payment"],
+      ["complete", "Done"],
+    ] as const;
+    const currentIndex = steps.findIndex(([key]) => key === current);
     return `
-      <div class="summary">
-        <div class="summary-row"><span>Order</span><span>#${escapeHtml(this._checkoutResult.order_id)}</span></div>
-        <div class="summary-row"><span>Items</span><span>${escapeHtml(this._checkoutResult.line_item_ids?.length || 0)}</span></div>
-        <div class="summary-row"><span>Amount</span><span>${escapeHtml(formatValue("amount_pence", this._checkoutResult.amount_pence))}</span></div>
-        <div class="summary-row"><span>Status</span><span>${escapeHtml(this._checkoutResult.status)}</span></div>
+      <ol class="checkout-progress" aria-label="Checkout progress">
+        ${steps.map(([key, label], index) => {
+          const state = index < currentIndex ? "done" : index === currentIndex ? "current" : "";
+          return `<li class="checkout-step ${state}" aria-current="${index === currentIndex ? "step" : "false"}">${escapeHtml(label)}</li>`;
+        }).join("")}
+      </ol>
+    `;
+  }
+
+  private _renderCheckoutSummary(): string {
+    const config = this._config(ObApi.instance!);
+    const count = Number(this._checkoutResult?.line_item_ids?.length || 0);
+    const itemLabel = this._checkoutItemLabel(config, count);
+    return `
+      <div class="summary-block">
+        <h3>Order summary</h3>
+        <div class="summary">
+          <div class="summary-row"><span>Order</span><span>#${escapeHtml(this._checkoutResult.order_id)}</span></div>
+          <div class="summary-row"><span>Items</span><span>${escapeHtml(`${count} ${itemLabel}`)}</span></div>
+          <div class="summary-row"><span>Total</span><span>${escapeHtml(formatValue("amount_pence", this._checkoutResult.amount_pence))}</span></div>
+          <div class="summary-row"><span>Status</span><span>${this._renderStatusPill(this._checkoutResult.status)}</span></div>
+        </div>
       </div>
     `;
   }
 
   private _renderPaymentSummary(): string {
     return `
-      <div class="summary">
-        <div class="summary-row"><span>Transaction</span><span>#${escapeHtml(this._paymentSession.transaction_id)}</span></div>
-        <div class="summary-row"><span>Reference</span><span>${escapeHtml(this._paymentSession.reference || "-")}</span></div>
-        <div class="summary-row"><span>Provider</span><span>${escapeHtml(this._paymentSession.provider || "-")}</span></div>
+      <div class="summary-block">
+        <h3>Payment</h3>
+        <div class="summary">
+          <div class="summary-row"><span>Transaction</span><span>#${escapeHtml(this._paymentSession.transaction_id)}</span></div>
+          <div class="summary-row"><span>Reference</span><span>${escapeHtml(this._paymentSession.reference || "-")}</span></div>
+          <div class="summary-row"><span>Provider</span><span>${escapeHtml(this._providerLabel(this._paymentSession.provider))}</span></div>
+          <div class="summary-row"><span>Status</span><span>${this._renderStatusPill(this._paymentSession.status)}</span></div>
+        </div>
       </div>
     `;
   }
@@ -662,21 +702,63 @@ export class ObCommerce extends HTMLElement {
       const isLocal = url.includes("/commerce/payments/local-simulator");
       if (isLocal) {
         return `
-          <div class="payment-frame-wrap">
-            <iframe class="payment-frame" title="Local payment simulator" src="${escapeAttr(url)}"></iframe>
+          <div class="payment-provider-card">
+            <div class="payment-provider-copy">
+              <h3>Test payment</h3>
+              <p class="notice">Use the local simulator to complete this payment.</p>
+            </div>
+            <div class="payment-frame-wrap">
+              <iframe class="payment-frame" title="Local payment simulator" src="${escapeAttr(url)}"></iframe>
+            </div>
           </div>
         `;
       }
       return `
         <div class="actions">
-          <a class="primary" href="${escapeAttr(url)}">Continue to payment</a>
+          <a class="btn primary" href="${escapeAttr(url)}">Continue to secure payment</a>
         </div>
       `;
     }
     if (action.type === "client_secret") {
-      return `<p class="notice">Payment client secret received.</p>`;
+      return `<p class="notice">Payment details are ready.</p>`;
     }
     return `<p class="notice">Payment session created.</p>`;
+  }
+
+  private _renderStatusPill(status: unknown): string {
+    const text = this._statusLabel(status);
+    const tone = statusClass("status", status);
+    return `<span class="status-pill ${escapeAttr(tone)}">${escapeHtml(text)}</span>`;
+  }
+
+  private _statusLabel(status: unknown): string {
+    const value = String(status || "").trim();
+    if (!value) return "-";
+    const labels: Record<string, string> = {
+      checkout_pending: "Reserved",
+      payment_pending: "Payment pending",
+      paid: "Paid",
+      expired: "Expired",
+      cancelled: "Cancelled",
+      refund_required: "Refund required",
+      refunded: "Refunded",
+      pending: "Pending",
+      authorized: "Authorized",
+      completed: "Completed",
+      failed: "Failed",
+    };
+    return labels[value] || fieldLabel(value);
+  }
+
+  private _providerLabel(provider: unknown): string {
+    const value = String(provider || "").trim();
+    if (value === "local" || value === "fake") return "Local test";
+    return value ? fieldLabel(value) : "-";
+  }
+
+  private _checkoutItemLabel(config: CommerceConfig, count: number): string {
+    const entity = config.lineItem?.entity || config.catalog?.entity || "item";
+    return count === 1 ? fieldLabel(entity).toLowerCase() : pluralDisplayName(entity).toLowerCase();
   }
 
   private _paymentActionUrl(url: string): string {
@@ -882,7 +964,29 @@ export class ObCommerce extends HTMLElement {
   private _variantLabel(item: Record<string, unknown>, config: CommerceConfig, lookups: LookupMap): string {
     const fields = config.catalog?.variantFields || [];
     if (fields.length === 0) return this._itemTitle(item, config, lookups);
-    return fields.map((field) => this._formatFieldValue(field, item[field.field], lookups)).filter(Boolean).join(" - ");
+    const used = new Set<string>();
+    const parts: string[] = [];
+    const start = fields.find((field) => this._isStartTemporalField(field.field));
+    const end = fields.find((field) => this._isEndTemporalField(field.field));
+    if (start && end && item[start.field] && item[end.field]) {
+      parts.push(formatTemporalRange(item[start.field], item[end.field]) || this._formatFieldValue(start, item[start.field], lookups));
+      used.add(start.field);
+      used.add(end.field);
+    }
+    for (const field of fields) {
+      if (used.has(field.field)) continue;
+      const value = this._formatFieldValue(field, item[field.field], lookups);
+      if (value) parts.push(value);
+    }
+    return parts.join(" - ");
+  }
+
+  private _isStartTemporalField(field: string): boolean {
+    return ["starts_at", "start_at", "scheduled_at", "date"].includes(field);
+  }
+
+  private _isEndTemporalField(field: string): boolean {
+    return ["ends_at", "end_at", "ends_on", "end_date"].includes(field);
   }
 
   private _fieldValue(item: Record<string, unknown>, field?: FieldRef | null): string {
@@ -910,9 +1014,9 @@ export class ObCommerce extends HTMLElement {
       `${line.quantity} x ${this._priceLabel(line.item, config)}`,
       ...Object.entries(line.options)
         .filter(([, value]) => value !== null && value !== "")
-        .map(([name, value]) => `${fieldLabel(name)}: ${value}`),
+        .map(([name, value]) => `${fieldLabel(name)}: ${fieldLabel(String(value))}`),
     ];
-    return parts.join(" - ");
+    return parts.join(", ");
   }
 
   private _restoreState(api: ObApi) {

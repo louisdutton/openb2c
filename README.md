@@ -82,11 +82,11 @@ compose --explain examples/duchyopera/composition.nix
 bun test
 ```
 
-Run the Duchy Opera generated server:
+Run the Duchy Opera generated public/admin UI against the generated API:
 
 ```bash
 cd examples/duchyopera
-bun run server
+bun run app
 ```
 
 ## Stack

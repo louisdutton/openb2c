@@ -45,14 +45,14 @@ compose --explain examples/duchyopera/composition.nix
 bun test
 ```
 
-Run the generated app:
+Run the generated public/admin UI against the generated API:
 
 ```bash
 cd examples/duchyopera
-bun run server
+bun run app
 ```
 
-Fresh local databases apply reference venue data and demo fixtures by default. Set `OPENB2C_APPLY_FIXTURES=false` to start with reference data only.
+Run only the generated API with `bun run server`. Fresh local app databases apply reference venue data and demo fixtures by default. Set `OPENB2C_APPLY_FIXTURES=false` to start with reference data only.
 
 ## Checkout Flow
 

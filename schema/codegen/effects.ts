@@ -31,8 +31,12 @@ export function genEffectsInterface(schema: Schema): string {
     events.add("commerce.order_created");
     events.add("commerce.order_paid");
     events.add("commerce.payment_failed");
+    events.add("commerce.payment_cancelled");
+    events.add("commerce.payment_refunded");
+    events.add("commerce.refund_required");
     notifyTemplates.add("receipt");
-    calls.add("payment.create_intent");
+    calls.add("payment.create_session");
+    calls.add("payment.refund_required");
     calls.add("analytics.track_purchase");
   }
   if (hasCommerceBookingAliases(schema)) {

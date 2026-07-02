@@ -222,6 +222,9 @@ describe("generated UI web components", () => {
     expect(authPage).toContain("<ob-auth-panel hide-header");
     expect(accountSummary).toContain("/api/users/${this._userId}");
     expect(accountSummary).toContain("_loadPurchases");
+    expect(accountSummary).toContain("_loadOwnedLines");
+    expect(accountSummary).toContain("My ${escapeHtml(lineLabel)}");
+    expect(accountSummary).toContain("Bookings");
     expect(accountSummary).toContain("getEcommerceConfig");
     expect(accountSummary).toContain("/commerce/catalog");
     expect(accountSummary).toContain("lineItem?.user");
@@ -241,6 +244,9 @@ describe("generated UI web components", () => {
     expect(entityList).toContain("recordHref(api, fks[column], value)");
     expect(entityList).toContain("lookupLabelFor(value, lookupRows, relationship)");
     expect(entityList).toContain("function lookupLabelFor");
+    expect(entityDetail).toContain("_loadLookupRows");
+    expect(entityDetail).toContain("lookupLabelFor(value, this._lookupRows[column] || [], relationship)");
+    expect(entityDetail).not.toContain('href="#/${fks[column]}s/${escapeAttr(value)}">#${escapeHtml(value)}</a>');
     expect(entityList).toContain('api.canCollection(this.entity, "read")');
     expect(entityList).toContain('api.canCollection(this.entity, "create")');
     expect(entityForm).toContain('type="date"');

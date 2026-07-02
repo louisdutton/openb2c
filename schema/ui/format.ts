@@ -290,8 +290,8 @@ function formatMinutes(value: number): string {
 export function statusClass(field: string, value: unknown): string {
   const normalized = String(value ?? "").toLowerCase();
   if (["active", "paid", "confirmed", "completed", "scheduled", "yes"].includes(normalized)) return "success";
-  if (["pending", "reserved", "draft", "issued"].includes(normalized)) return "warning";
-  if (["cancelled", "canceled", "failed", "expired", "revoked", "no"].includes(normalized)) return "danger";
+  if (["pending", "reserved", "checkout_pending", "payment_pending", "authorized", "draft", "issued"].includes(normalized)) return "warning";
+  if (["cancelled", "canceled", "failed", "expired", "refund_required", "revoked", "no"].includes(normalized)) return "danger";
   if (field === "active" && value === 1) return "success";
   if (field === "active" && value === 0) return "danger";
   return "";

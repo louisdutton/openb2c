@@ -3,8 +3,9 @@
   "version": "1.0.0",
   "scripts": {
     "generate": "compose composition.nix",
+    "app": "bun run dev-app.ts",
     "server": "bun run generated/server.ts",
     "mcp": "bun run generated/mcp.ts",
-    "dev": "bun run --watch generated/server.ts"
+    "dev": "bun run --watch dev-app.ts"
   }
 }

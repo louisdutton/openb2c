@@ -2,7 +2,7 @@
  * <ob-account-summary> - Signed-in profile and purchase history.
  */
 import { ObApi } from "./ob-api";
-import { displayName, escapeAttr, escapeHtml, fieldDisplayLabel, fieldFormat, fieldHelpText, fieldLabel, fieldPlaceholder, formatValue, labelFor, orderedSchemaFields, statusClass } from "../format";
+import { displayName, escapeAttr, escapeHtml, fieldDisplayLabel, fieldFormat, fieldHelpText, fieldLabel, fieldPlaceholder, formatValue, labelFor, orderedSchemaFields, pluralDisplayName, statusClass } from "../format";
 import { stylesheetLink } from "../style-link";
 
 const PROFILE_EXCLUDED_FIELDS = new Set(["id", "email", "user_id", "customer_type", "created_at", "updated_at"]);
@@ -38,16 +38,23 @@ type Purchase = {
   catalog: Map<string, Record<string, unknown>>;
 };
 
+type OwnedLine = {
+  line: Record<string, unknown>;
+  catalog: Map<string, Record<string, unknown>>;
+};
+
 export class ObAccountSummary extends HTMLElement {
   private _userId: number | null = null;
   private _profile: Record<string, unknown> | null = null;
   private _purchases: Purchase[] = [];
+  private _ownedLines: OwnedLine[] = [];
   private _error = "";
   private _message = "";
   private _saving = false;
   private _onAuthChanged = () => {
     this._profile = null;
     this._purchases = [];
+    this._ownedLines = [];
     void this._render();
   };
 
@@ -108,9 +115,11 @@ export class ObAccountSummary extends HTMLElement {
         this._profile = await profileRes.json() as Record<string, unknown>;
       }
       this._purchases = await this._loadPurchases(api, userId);
+      this._ownedLines = await this._loadOwnedLines(api, userId);
     } catch {
       this._profile = null;
       this._purchases = [];
+      this._ownedLines = [];
       this._error = "Could not load account.";
     }
   }
@@ -136,6 +145,24 @@ export class ObAccountSummary extends HTMLElement {
       lines: lineRows.get(String(order.id)) || [],
       catalog,
     }));
+  }
+
+  private async _loadOwnedLines(api: ObApi, userId: number): Promise<OwnedLine[]> {
+    const config = api.getEcommerceConfig() as CommerceConfig | null;
+    const lineEntity = config?.lineItem?.entity;
+    const lineUserField = config?.lineItem?.user?.field;
+    if (!lineEntity || !lineUserField) return [];
+
+    const lines = await this._fetchRows(api, lineEntity, {
+      [lineUserField]: String(userId),
+      limit: "50",
+      sort: "id",
+      order: "desc",
+    });
+    if (lines.length === 0) return [];
+
+    const catalog = await this._catalogMap(api, config);
+    return lines.map((line) => ({ line, catalog }));
   }
 
   private async _lineItemsForOrders(
@@ -169,6 +196,8 @@ export class ObAccountSummary extends HTMLElement {
       }
       if ([...result.values()].some((lines) => lines.length > 0)) return result;
     }
+
+    if (orderLineEntity && orderField && lineField) return result;
 
     const lineUserField = config?.lineItem?.user?.field || "user_id";
     const lines = await this._fetchRows(api, lineEntity, { [lineUserField]: String(userId), limit: "50", sort: "id", order: "desc" });
@@ -269,18 +298,49 @@ export class ObAccountSummary extends HTMLElement {
   private _renderPurchases(api: ObApi): string {
     const config = api.getEcommerceConfig() as CommerceConfig | null;
     const orderEntity = config?.order?.entity || "order";
+    const lineEntity = config?.lineItem?.entity || "item";
+    const lineLabel = pluralDisplayName(lineEntity).toLowerCase();
     return `
       <section class="account-section" aria-labelledby="purchases-title">
         <div class="section-header">
-          <h2 id="purchases-title">Purchases</h2>
+          <h2 id="purchases-title">My ${escapeHtml(lineLabel)}</h2>
+          ${this._ownedLines.length > 0 ? `<span>${escapeHtml(`${this._ownedLines.length} ${displayName(lineEntity).toLowerCase()}${this._ownedLines.length === 1 ? "" : "s"}`)}</span>` : ""}
+        </div>
+        ${this._ownedLines.length === 0 ? `<p class="empty">No ${escapeHtml(lineLabel)} yet.</p>` : `
+          <ul class="purchase-list ticket-list">
+            ${this._ownedLines.map((owned) => this._renderOwnedLine(owned, config)).join("")}
+          </ul>
+        `}
+      </section>
+      <section class="account-section" aria-labelledby="orders-title">
+        <div class="section-header">
+          <h2 id="orders-title">Bookings</h2>
           ${this._purchases.length > 0 ? `<span>${escapeHtml(`${this._purchases.length} ${displayName(orderEntity).toLowerCase()}${this._purchases.length === 1 ? "" : "s"}`)}</span>` : ""}
         </div>
-        ${this._purchases.length === 0 ? `<p class="empty">No purchases yet.</p>` : `
+        ${this._purchases.length === 0 ? `<p class="empty">No bookings yet.</p>` : `
           <ul class="purchase-list">
             ${this._purchases.map((purchase) => this._renderPurchase(purchase, config)).join("")}
           </ul>
         `}
       </section>
+    `;
+  }
+
+  private _renderOwnedLine(owned: OwnedLine, config: CommerceConfig | null): string {
+    const line = owned.line;
+    const statusField = config?.lineItem?.status?.field || "status";
+    const status = line[statusField] === undefined ? "" : String(line[statusField]);
+    const badgeClass = statusClass(statusField, status);
+    return `
+      <li class="purchase-item ticket-item">
+        <div class="purchase-summary">
+          <div>
+            <strong>${escapeHtml(this._lineTitle(line, owned.catalog, config))}</strong>
+            <span>${escapeHtml(this._lineMeta(line, config))}</span>
+          </div>
+          ${status ? `<span class="badge ${escapeAttr(badgeClass)}">${escapeHtml(status)}</span>` : ""}
+        </div>
+      </li>
     `;
   }
 
@@ -325,25 +385,36 @@ export class ObAccountSummary extends HTMLElement {
   private _renderPurchaseLine(line: Record<string, unknown>, catalog: Map<string, Record<string, unknown>>, config: CommerceConfig | null): string {
     const catalogField = config?.lineItem?.catalogItem?.field;
     const catalogItem = catalogField ? catalog.get(String(line[catalogField])) : null;
-    const priceField = config?.lineItem?.price?.field || "price_pence";
     const statusField = config?.lineItem?.status?.field || "status";
-    const quantityField = config?.lineItem?.quantity?.field || "quantity";
-    const quantity = Number(line[quantityField] || 1);
     const title = catalogItem ? String(catalogItem.__label || labelFor(catalogItem)) : labelFor(line);
-    const meta = [
-      `${Number.isFinite(quantity) && quantity > 1 ? `${quantity} x ` : ""}${line[priceField] !== undefined ? formatValue(priceField, line[priceField]) : ""}`.trim(),
-      ...this._lineOptions(line, config),
-    ].filter(Boolean).join(" · ");
+    const meta = this._lineMeta(line, config);
     const status = line[statusField] === undefined ? "" : String(line[statusField]);
     return `
       <div class="purchase-line">
         <div>
-          <strong>${escapeHtml(title)}</strong>
+          <strong>${escapeHtml(this._lineTitle(line, catalog, config) || title)}</strong>
           ${meta ? `<span>${escapeHtml(meta)}</span>` : ""}
         </div>
         ${status ? `<span>${escapeHtml(status)}</span>` : ""}
       </div>
     `;
+  }
+
+  private _lineTitle(line: Record<string, unknown>, catalog: Map<string, Record<string, unknown>>, config: CommerceConfig | null): string {
+    const catalogField = config?.lineItem?.catalogItem?.field;
+    const catalogItem = catalogField ? catalog.get(String(line[catalogField])) : null;
+    return catalogItem ? String(catalogItem.__label || labelFor(catalogItem)) : labelFor(line);
+  }
+
+  private _lineMeta(line: Record<string, unknown>, config: CommerceConfig | null): string {
+    const priceField = config?.lineItem?.price?.field || "price_pence";
+    const quantityField = config?.lineItem?.quantity?.field || "quantity";
+    const quantity = Number(line[quantityField] || 1);
+    return [
+      line.id !== undefined ? `${displayName(config?.lineItem?.entity || "item")} #${line.id}` : "",
+      `${Number.isFinite(quantity) && quantity > 1 ? `${quantity} x ` : ""}${line[priceField] !== undefined ? formatValue(priceField, line[priceField]) : ""}`.trim(),
+      ...this._lineOptions(line, config),
+    ].filter(Boolean).join(" · ");
   }
 
   private _lineOptions(line: Record<string, unknown>, config: CommerceConfig | null): string[] {

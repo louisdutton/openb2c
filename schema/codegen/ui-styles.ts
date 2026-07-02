@@ -607,6 +607,39 @@ const commerce = `
     line-height: 1.25;
     font-weight: 800;
   }
+  :host(ob-commerce) .checkout-progress {
+    list-style: none;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 8px;
+    margin-bottom: 18px;
+  }
+  :host(ob-commerce) .checkout-step {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 30px;
+    padding: 6px 8px;
+    border: 1px solid var(--ob-border);
+    border-radius: 999px;
+    background: var(--ob-bg-subtle);
+    color: var(--ob-text-muted);
+    font-size: 12px;
+    font-weight: 800;
+    line-height: 1.2;
+    text-align: center;
+    white-space: nowrap;
+  }
+  :host(ob-commerce) .checkout-step.done {
+    background: var(--ob-success-soft);
+    border-color: transparent;
+    color: var(--ob-success);
+  }
+  :host(ob-commerce) .checkout-step.current {
+    background: var(--ob-primary);
+    border-color: var(--ob-primary);
+    color: white;
+  }
   :host(ob-commerce) .step {
     color: var(--ob-text-muted);
     font-size: 12px;
@@ -712,6 +745,20 @@ const commerce = `
     gap: 8px;
     font-size: 14px;
   }
+  :host(ob-commerce) .summary-block {
+    display: grid;
+    gap: 10px;
+    margin-top: 14px;
+  }
+  :host(ob-commerce) .summary-block + .summary-block {
+    padding-top: 14px;
+    border-top: 1px solid var(--ob-border);
+  }
+  :host(ob-commerce) .summary-block h3 {
+    font-size: 14px;
+    line-height: 1.3;
+    font-weight: 800;
+  }
   :host(ob-commerce) .summary-row {
     display: flex;
     align-items: center;
@@ -729,6 +776,44 @@ const commerce = `
     text-align: right;
     font-weight: 800;
     overflow-wrap: anywhere;
+  }
+  :host(ob-commerce) .status-pill {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 24px;
+    padding: 3px 8px;
+    border-radius: 999px;
+    background: var(--ob-bg-alt);
+    color: var(--ob-text-muted);
+    font-size: 12px;
+    font-weight: 800;
+    line-height: 1.2;
+  }
+  :host(ob-commerce) .status-pill.success {
+    background: var(--ob-success-soft);
+    color: var(--ob-success);
+  }
+  :host(ob-commerce) .status-pill.warning {
+    background: var(--ob-warning-soft);
+    color: var(--ob-warning);
+  }
+  :host(ob-commerce) .status-pill.danger {
+    background: var(--ob-danger-soft);
+    color: var(--ob-danger);
+  }
+  :host(ob-commerce) .payment-provider-card {
+    display: grid;
+    gap: 12px;
+    margin-top: 16px;
+  }
+  :host(ob-commerce) .payment-provider-copy h3 {
+    font-size: 15px;
+    line-height: 1.3;
+    font-weight: 800;
+  }
+  :host(ob-commerce) .payment-provider-copy .notice {
+    margin-top: 4px;
   }
   :host(ob-commerce) .payment-frame-wrap {
     margin-top: 16px;
@@ -762,9 +847,16 @@ const commerce = `
     }
     :host(ob-commerce) .page-header h1 { font-size: 24px; }
     :host(ob-commerce) .panel-header { flex-direction: column; }
+    :host(ob-commerce) .checkout-progress { gap: 6px; }
+    :host(ob-commerce) .checkout-step {
+      min-height: 28px;
+      padding: 5px 6px;
+      font-size: 11px;
+    }
     :host(ob-commerce) .configure-grid { grid-template-columns: 1fr; }
     :host(ob-commerce) .split-actions { align-items: stretch; }
     :host(ob-commerce) .actions button,
+    :host(ob-commerce) .actions .btn,
     :host(ob-commerce) .cart-chip { width: 100%; }
   }
 `;

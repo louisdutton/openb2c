@@ -72,7 +72,7 @@ describe("generated UI browser automation", () => {
       await page.getByRole("button", { name: "Cart: 1 · £25.00" }).click();
       await page.getByRole("heading", { name: "Review cart" }).waitFor();
       await page.locator("ob-api").evaluate((api: any) => api.setAuthContext({ userId: 999, scopes: ["self"] }, ""));
-      await page.locator("ob-commerce").getByRole("button", { name: "Checkout", exact: true }).click();
+      await page.locator("ob-commerce").getByRole("button", { name: "Reserve and continue", exact: true }).click();
       await page.getByRole("heading", { name: "Sign in" }).waitFor();
       expect(page.url()).toContain("#/login?return=%2Fcart");
       const checkoutEmail = `ui-checkout-${Date.now()}@example.test`;
@@ -82,18 +82,17 @@ describe("generated UI browser automation", () => {
       await page.locator("ob-auth-panel").getByRole("button", { name: "Sign in" }).click();
 
       await page.getByRole("heading", { name: "Review cart" }).waitFor();
-      await page.locator("ob-commerce").getByRole("button", { name: "Checkout", exact: true }).click();
-      await page.getByRole("heading", { name: "Confirm payment" }).waitFor();
-      await page.getByRole("button", { name: "Create payment session" }).click();
+      await page.locator("ob-commerce").getByRole("button", { name: "Reserve and continue", exact: true }).click();
+      await page.getByRole("heading", { name: "Payment details" }).waitFor();
+      await page.getByRole("button", { name: "Continue to payment" }).click();
 
-      await page.getByRole("heading", { name: "Payment" }).waitFor();
+      await page.getByRole("heading", { name: "Complete payment" }).waitFor();
       await page.getByText(/fake_ps_/).waitFor();
       const simulator = page.frameLocator('iframe[title="Local payment simulator"]');
       await simulator.getByRole("heading", { name: "Local payment simulator" }).waitFor();
       await simulator.getByRole("button", { name: "Authorize and capture" }).click();
       await page.getByRole("heading", { name: "Booking confirmed" }).waitFor();
-      await page.getByText("Receipt").waitFor();
-      await page.getByText("Queued").waitFor();
+      await page.getByText("Receipt queued").waitFor();
       const checkoutAccountLabel = `${checkoutEmail.split("@")[0].slice(0, 13)}...`;
       await page.getByRole("button", { name: checkoutAccountLabel }).waitFor();
       expect(await page.getByRole("button", { name: /User #/ }).count()).toBe(0);
@@ -101,7 +100,9 @@ describe("generated UI browser automation", () => {
       expect(page.url()).toContain("#/cart");
       await page.getByRole("button", { name: checkoutAccountLabel }).click();
       await page.getByRole("heading", { name: "Account" }).waitFor();
-      await page.getByRole("heading", { name: "Purchases" }).waitFor();
+      await page.getByRole("heading", { name: "My tickets" }).waitFor();
+      await page.getByRole("heading", { name: "Bookings" }).waitFor();
+      await page.getByText("Ticket #").waitFor();
       await page.getByText("Booking #").waitFor();
       await page.getByText("The Magic Flute").waitFor();
       expect(await page.getByRole("heading", { name: "Activity" }).count()).toBe(0);
@@ -131,8 +132,8 @@ describe("generated UI browser automation", () => {
       await page.getByLabel(/Verification code/).waitFor();
       await page.locator("ob-auth-panel").getByRole("button", { name: "Sign in" }).click();
 
-      await page.locator("ob-commerce").getByRole("button", { name: "Checkout", exact: true }).click();
-      await page.getByRole("heading", { name: "Confirm payment" }).waitFor();
+      await page.locator("ob-commerce").getByRole("button", { name: "Reserve and continue", exact: true }).click();
+      await page.getByRole("heading", { name: "Payment details" }).waitFor();
       expect(errors).toEqual([]);
     } finally {
       await context.close();

@@ -28,6 +28,7 @@ export class ObEntityDetail extends HTMLElement {
   private _confirmDelete = false;
   private _confirmOperation = "";
   private _deleteError = "";
+  private _lookupRows: Record<string, any[]> = {};
 
   constructor() {
     super();
@@ -62,6 +63,7 @@ export class ObEntityDetail extends HTMLElement {
     if (!schema) return;
 
     const fks = api.getForeignKeys(this.entity);
+    const relationships = api.getForeignKeyRelationships(this.entity);
 
     let record: any;
     try {
@@ -95,6 +97,7 @@ export class ObEntityDetail extends HTMLElement {
       return;
     }
     const relatedGroups = await this._loadRelatedRecords(api, record);
+    this._lookupRows = await this._loadLookupRows(api, fks);
     const operationViews = this._operationViews(api, record);
     const pendingOperation = operationViews.find((operation) => operation.op === this._confirmOperation);
     const canUpdate = api.can(this.entity, "update", record);
@@ -119,7 +122,7 @@ export class ObEntityDetail extends HTMLElement {
         <dl>
           ${cols.map(([c, prop]) => {
             const val = record[c] ?? "";
-            return `<dt>${escapeHtml(fieldDisplayLabel(c, prop))}</dt><dd>${this._renderValue(c, val, fks, prop)}</dd>`;
+            return `<dt>${escapeHtml(fieldDisplayLabel(c, prop))}</dt><dd>${this._renderValue(c, val, fks, prop, api, relationships[c])}</dd>`;
           }).join("")}
         </dl>
         ${relatedGroups.length > 0 ? this._renderRelatedRecords(relatedGroups) : ""}
@@ -201,6 +204,22 @@ export class ObEntityDetail extends HTMLElement {
         unavailableReason: availability.reason,
       };
     }).filter((operation) => api.can(this.entity, operation.op, record));
+  }
+
+  private async _loadLookupRows(api: ObApi, fks: Record<string, string>): Promise<Record<string, any[]>> {
+    const result: Record<string, any[]> = {};
+    await Promise.all(Object.entries(fks).map(async ([field, entity]) => {
+      if (!api.canCollection(entity, "read")) return;
+      try {
+        const res = await api.request(`/api/${entity}s?limit=200`);
+        if (!res.ok) return;
+        const data = await res.json();
+        result[field] = data.items || [];
+      } catch {
+        result[field] = [];
+      }
+    }));
+    return result;
   }
 
   private async _loadRelatedRecords(api: ObApi, record: Record<string, unknown>): Promise<RelatedGroup[]> {
@@ -331,13 +350,16 @@ export class ObEntityDetail extends HTMLElement {
     }
   }
 
-  private _renderValue(column: string, value: unknown, fks: Record<string, string>, prop: any): string {
+  private _renderValue(column: string, value: unknown, fks: Record<string, string>, prop: any, api: ObApi, relationship: any): string {
     if (value === null || value === undefined || value === "") {
       return `<span class="muted">-</span>`;
     }
 
     if (fks[column]) {
-      return `<a href="#/${fks[column]}s/${escapeAttr(value)}">#${escapeHtml(value)}</a>`;
+      const label = lookupLabelFor(value, this._lookupRows[column] || [], relationship);
+      const href = recordHref(api, fks[column], value);
+      const title = label === `#${value}` ? label : `${label} (#${value})`;
+      return `<a href="${escapeAttr(href)}" title="${escapeAttr(title)}">${escapeHtml(label)}</a>`;
     }
 
     const formatted = formatValue(column, value, prop);
@@ -363,3 +385,13 @@ function relatedListHref(group: RelatedGroup): string {
 }
 
 customElements.define("ob-entity-detail", ObEntityDetail);
+
+function lookupLabelFor(value: unknown, rows: any[], relationship: any): string {
+  const row = rows.find((candidate) => String(candidate.id) === String(value));
+  return row ? labelFor(row) : `#${value}`;
+}
+
+function recordHref(api: ObApi, entity: string, id: unknown): string {
+  if (api.getAdminWorkspace(entity)) return `#/workspaces/${entity}/${id}`;
+  return `#/${entity}s/${id}`;
+}
