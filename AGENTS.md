@@ -1,112 +1,81 @@
-# OpenB2C Framework
+# OpenB2C
 
-Declarative B2C platform framework with Nix-based schema definition and multi-protocol API generation.
+OpenB2C is a declarative generator for composable B2C and operational systems.
 
-See [todo.md](todo.md) for roadmap and [examples/](examples/) for implementations.
+The premise is that most organisations need the same core machinery: users, profiles, events, resources, documents, bookings, payments, permissions, notifications, audit, and admin workflows. OpenB2C lets a project compose those pieces in Nix and generates the backend APIs plus public/private web surfaces from that single model.
 
-## Overview
+## Source Of Truth
 
-OpenB2C is a code-generation framework for building B2C platforms:
+The evaluated Nix schema is authoritative.
 
-- **Declarative schema**: Define entities and operations in Nix
-- **Multi-protocol**: Auto-generates REST API + MCP server
-- **Type-safe**: TypeScript throughout
-- **Modular**: Compose reusable business domain modules
-
-## Design Principles
-
-- **Declarative**: Business logic in Nix, codegen to TypeScript
-- **Backend-first**: REST + MCP APIs, client-agnostic
-- **Type-safe**: End-to-end type safety from schema to runtime
-- **Simple deployment**: Bun + SQLite, single runtime
-- **Federated identity**: Optional Ed25519-based auth module
+- Tables and foreign keys define the data graph.
+- Foreign keys are the primary relationship signal.
+- Generated UI is inferred from schema structure, operations, constraints, metadata, and temporal fields.
+- Avoid parallel UI schemas unless inference genuinely cannot express the workflow.
+- Generated code is output under each example's `generated/` directory and should not be hand-edited.
 
 ## Structure
 
-```
-schema/                 # Framework
-├── modules/*.nix       # Reusable domain modules
-├── lib/expr.nix        # Guard expression builders
-├── base.nix            # Module system
-├── default.nix         # Module evaluator
-└── codegen.ts          # Code generator
+```text
+schema/
+├── base.nix              # Nix option model
+├── lib/                  # expression and composition helpers
+├── modules/              # reusable entity/capability modules
+├── bundles/              # opinionated cross-entity bundles
+├── codegen/              # SQL, TS, REST, MCP, OpenAPI, UI generation
+└── ui/                   # generated public/admin web component runtimes
 
-examples/               # Example compositions
-├── duchyopera/
-│   ├── composition.nix # Which modules to include
-│   └── logo/           # Example-specific assets
-
-src/generated/          # Generated code (gitignored)
-├── schema.sql          # SQLite DDL
-├── types.ts            # TypeScript interfaces
-├── services.ts         # Business logic
-├── server.ts           # REST API
-├── mcp.ts              # MCP server
-└── integration.test.ts # E2E tests
+examples/
+└── duchyopera/           # current pilot app
 ```
 
-## Adding a Module
+## Schema Conventions
 
-1. Create `schema/modules/<name>.nix`:
-   ```nix
-   { config, lib, ... }:
-   let E = import ../lib/expr.nix;
-   in {
-     tables.<name> = {
-       id = { type = "integer"; pk = true; auto = true; };
-       # columns...
-     };
-     operations.<name> = {
-       myOp = {
-         guard = E.eq (E.f "status") (E.lit "pending");
-         set = { status = "active"; };
-         effects = [{ emit = "<name>.activated"; }];
-       };
-     };
-   }
-   ```
+- Put single-field constraints beside the field: `constraints.enum`, `constraints.length`, `constraints.range`, `constraints.pattern`.
+- Put multi-field constraints under `constraints.<entity>.unique` or `constraints.<entity>.check`.
+- Use `references = "target(id)"` for structure. Field `relationship` metadata may only describe that FK for generated clients.
+- Use `config.refs.<entity>.<field>` for field references.
+- Use `config.values.<entity>.<field>.<value>` for enum values.
+- Use `config.entityRefs.<entity>` for entity references.
+- Use `config.effectRefs` for declared effects.
 
-2. Add module name to example's `composition.nix`
+Operations separate semantics from presentation:
 
-## Creating a New Example
+```nix
+operations.ticket.confirm = {
+  guard = E.eq (E.f F.status) (E.lit V.status.reserved);
+  transitions = [{
+    field = F.status;
+    from = [ V.status.reserved ];
+    to = V.status.confirmed;
+  }];
+  set.status.value = V.status.confirmed;
+  presentation.group = "ticketLifecycle";
+  audit.summary = "Confirmed ticket";
+  effects = [
+    { notify = { template = ER.notifications.templates.ticket_confirmation; to = ER.notifications.recipients.customer; }; }
+  ];
+};
+```
 
-1. Create `examples/<name>/composition.nix`:
-   ```nix
-   let
-     lib = import <nixpkgs/lib>;
-
-     modules = lib.evalModules {
-       modules = [
-         ../../schema/base.nix
-         ../../schema/modules/customer.nix
-         ../../schema/modules/identity.nix
-         # ... import other modules you need
-       ];
-     };
-
-   in {
-     tables = modules.config.tables;
-     operations = modules.config.operations;
-   }
-   ```
-
-2. Generate code:
-   ```bash
-   compose examples/<name>/composition.nix
-   ```
+Typed assignments support `value`, `now`, `expression`, `input`, and `clear`. Exactly one assignment source should be set.
 
 ## Commands
 
 ```bash
-compose <composition.nix>    # Evaluate composition and generate code
-bun test                     # All tests
+nix develop
+compose examples/duchyopera/composition.nix
+compose --explain examples/duchyopera/composition.nix
+bun test
+```
 
+Run the Duchy Opera generated server:
 
-Note: `compose` is a Nix-packaged tool available in the dev shell. It finds the project root automatically, so you can run it from any subdirectory.
+```bash
+cd examples/duchyopera
+bun run server
+```
 
-## Tech
+## Current Focus
 
-- **Runtime**: Bun
-- **Database**: SQLite
-- **Schema**: Nix
-- **Dev**: Nix flake
+Duchy Opera is the acceptance case for proving the wider platform: public performance booking, ticket checkout, payments, and private production operations should all come from reusable schema modules and graph-based generation.

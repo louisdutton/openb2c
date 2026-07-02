@@ -6,6 +6,7 @@ import { genRuntime } from "./runtime";
 import { genRoutes } from "./server";
 import { genAppShell } from "./ui";
 import type { Schema } from "./types";
+import { DEFAULT_ORGANIZATION_METADATA } from "./utils";
 
 const PROJECT_ROOT = join(import.meta.dir, "..", "..");
 
@@ -43,9 +44,8 @@ function generatedMetadataArtifacts(schema: Schema): string {
 }
 
 describe("application metadata", () => {
-  test("real example compositions generate isolated app metadata", async () => {
+  test("real example composition generates organization-specific metadata", async () => {
     const duchyOpera = await loadExampleSchema("duchyopera");
-    const ticketing = await loadExampleSchema("ticketing");
 
     expect(duchyOpera.organization).toMatchObject({
       name: "Duchy Opera",
@@ -56,12 +56,6 @@ describe("application metadata", () => {
     });
     expect(duchyOpera.organization.logo?.src.endsWith("examples/duchyopera/logo/duchy-opera-icon.svg")).toBe(true);
     expect(duchyOpera).not.toHaveProperty("service");
-    expect(ticketing.organization).toMatchObject({
-      name: "OpenB2C",
-      description: "OpenB2C framework examples",
-      logo: null,
-    });
-    expect(ticketing).not.toHaveProperty("service");
 
     const duchyOpenApi = JSON.parse(genOpenAPI(duchyOpera));
     expect(duchyOpenApi.info).toMatchObject({
@@ -78,14 +72,24 @@ describe("application metadata", () => {
     });
     expect(duchyOpenApi.servers).toEqual([{ url: "http://localhost:3085" }]);
 
-    const ticketingOpenApi = JSON.parse(genOpenAPI(ticketing));
-    expect(ticketingOpenApi.info).toMatchObject({
+    const defaultSchema: Schema = {
+      organization: DEFAULT_ORGANIZATION_METADATA,
+      tables: {
+        note: {
+          id: { type: "integer", pk: true, auto: true, required: false, unique: false, default: null, references: null },
+          name: { type: "text", pk: false, auto: false, required: true, unique: false, default: null, references: null },
+        },
+      },
+      operations: {},
+    };
+    const defaultOpenApi = JSON.parse(genOpenAPI(defaultSchema));
+    expect(defaultOpenApi.info).toMatchObject({
       title: "OpenB2C API",
       version: "0.1.0",
-      description: "OpenB2C framework examples",
+      description: "Generated OpenB2C organization",
     });
-    expect(ticketingOpenApi["x-openb2c-organization"].logo).toBeNull();
-    expect(ticketingOpenApi.servers).toEqual([{ url: "http://localhost:3085" }]);
+    expect(defaultOpenApi["x-openb2c-organization"].logo).toBeNull();
+    expect(defaultOpenApi.servers).toEqual([{ url: "http://localhost:3085" }]);
 
     const duchyArtifacts = generatedMetadataArtifacts(duchyOpera);
     expect(duchyArtifacts).toContain('"databasePath": "duchy-opera.db"');
@@ -95,13 +99,13 @@ describe("application metadata", () => {
     expect(duchyArtifacts).not.toContain("openb2c.db");
     expect(duchyArtifacts).not.toContain("http://localhost:3185");
 
-    const ticketingArtifacts = generatedMetadataArtifacts(ticketing);
-    expect(ticketingArtifacts).toContain('"databasePath": "openb2c.db"');
-    expect(ticketingArtifacts).toContain('"slug": "openb2c"');
-    expect(ticketingArtifacts).toContain("<title>OpenB2C</title>");
-    expect(ticketingArtifacts).toContain("http://localhost:3085");
-    expect(ticketingArtifacts).not.toContain("Duchy Opera API");
-    expect(ticketingArtifacts).not.toContain("duchy-opera.db");
-    expect(ticketingArtifacts).not.toContain("opera.db");
+    const defaultArtifacts = generatedMetadataArtifacts(defaultSchema);
+    expect(defaultArtifacts).toContain('"databasePath": "openb2c.db"');
+    expect(defaultArtifacts).toContain('"slug": "openb2c"');
+    expect(defaultArtifacts).toContain("<title>OpenB2C</title>");
+    expect(defaultArtifacts).toContain("http://localhost:3085");
+    expect(defaultArtifacts).not.toContain("Duchy Opera API");
+    expect(defaultArtifacts).not.toContain("duchy-opera.db");
+    expect(defaultArtifacts).not.toContain("opera.db");
   });
 });

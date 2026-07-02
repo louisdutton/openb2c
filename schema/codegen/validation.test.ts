@@ -79,10 +79,8 @@ function invalidSchema(): Schema {
 describe("schema validation diagnostics", () => {
   test("real example compositions pass codegen validation", async () => {
     const duchyOpera = await loadExampleSchema("duchyopera");
-    const ticketing = await loadExampleSchema("ticketing");
 
     expect(validateSchema(duchyOpera)).toEqual([]);
-    expect(validateSchema(ticketing)).toEqual([]);
   });
 
   test("reports path-specific diagnostics for invalid schemas", () => {

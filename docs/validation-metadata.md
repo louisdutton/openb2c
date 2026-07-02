@@ -1,34 +1,49 @@
-# Validation Metadata
+# Constraints
 
-Validation metadata is split by scope.
+OpenB2C uses one constraint model and allocates enforcement to the database, application code, or both.
 
-Field-level rules live beside the field:
+## Field Constraints
+
+Single-field constraints are colocated with the field:
 
 ```nix
-tables.performance.title.validation = {
-  minLength = 1;
-  maxLength = 160;
-  pattern = "^[^<>]+$";
+tables.performance.status = {
+  type = "text";
+  constraints.enum = [ "scheduled" "cancelled" "completed" ];
 };
+
+tables.ticket.price_pence.constraints.range.min = 0;
+tables.user.email.constraints.pattern = "^[^@]+@[^@]+$";
 ```
 
-Supported field rules are `minLength`, `maxLength`, `minimum`, `maximum`, `pattern`, and `enum`. Generated OpenAPI schemas expose them directly, generated forms use the browser-native equivalents where possible, and generated services enforce them before writes.
+Supported field constraints:
 
-Cross-field constraints live under `validations.<entity>` because they describe a whole record rather than a single column:
+- `constraints.enum`
+- `constraints.pattern`
+- `constraints.length.min`
+- `constraints.length.max`
+- `constraints.range.min`
+- `constraints.range.max`
+
+## Record Constraints
+
+Multi-field constraints live under `constraints.<entity>`:
 
 ```nix
-validations.ticket.vipPriceMinimum = {
-  fields = [
-    config.refs.ticket.ticket_type
-    config.refs.ticket.price_pence
+constraints.rehearsal.check.ends_after_start = {
+  fields = with config.refs.rehearsal; [
+    starts_at
+    ends_at
   ];
-  expression = E.or
-    (E.ne (E.f "ticket_type") (E.lit "vip"))
-    (E.gte (E.f "price_pence") (E.lit 2500));
-  message = "VIP tickets must cost at least GBP 25.00.";
+  expression = E.lt (E.f config.refs.rehearsal.starts_at) (E.f config.refs.rehearsal.ends_at);
+};
+
+constraints.ticket.unique.unique_performance_seat = {
+  fields = with config.refs.ticket; [
+    performance_id
+    seat
+  ];
 };
 ```
 
-Cross-field constraints use the same local expression AST as operation guards, but they are intentionally limited to fields on the current record. Codegen validates that each expression field is declared in `fields`, and generated services evaluate the constraint against the proposed record on create and against the merged existing-plus-input record on update.
-
-Generated OpenAPI includes cross-field constraints under `x-openb2c-validation.crossFieldConstraints` so clients and documentation can explain constraints that JSON Schema cannot express cleanly.
+Do not add hand-written message strings by default. Generated services and clients can derive readable constraint errors from the entity, fields, and constraint kind.

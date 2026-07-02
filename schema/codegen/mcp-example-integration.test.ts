@@ -45,7 +45,7 @@ async function nixEvalJson(args: string[]): Promise<{ stdout: string; stderr: st
   return { stdout, stderr, exitCode };
 }
 
-async function loadExampleSchema(example: "duchyopera" | "ticketing"): Promise<Schema> {
+async function loadExampleSchema(example: "duchyopera"): Promise<Schema> {
   const result = await nixEvalJson(["-f", join(PROJECT_ROOT, "examples", example, "composition.nix")]);
   if (result.exitCode !== 0) {
     throw new Error(`nix eval failed for ${example}: ${result.stderr}`);
@@ -165,68 +165,4 @@ describe("generated MCP example integrations", () => {
     }
   });
 
-  test("Ticketing generated MCP exposes issue workflow metadata and mutates fixture records", async () => {
-    const schema = await loadExampleSchema("ticketing");
-    const dir = writeGeneratedExample(schema, "ticketing");
-    const dbPath = join(dir, "ticketing.sqlite");
-    const restoreEnv = applyEnv({
-      DB_PATH: dbPath,
-      OPENB2C_APPLY_FIXTURES: "true",
-      NODE_ENV: "test",
-    });
-
-    try {
-      const mcp = await import(pathToFileURL(join(dir, "mcp.ts")).href) as GeneratedMcp;
-      const auth = { userId: 1, scopes: ["*"] };
-
-      const listed = await mcp.handleRequest({ jsonrpc: "2.0", id: "tools", method: "tools/list" }, auth);
-      const tools = (listed.result as { tools: unknown }).tools;
-      expect(toolByName(tools, "list_issues")).toBeDefined();
-      expect(toolByName(tools, "start_issue")?.annotations).toMatchObject({
-        destructiveHint: false,
-        openWorldHint: true,
-      });
-      expect(toolByName(tools, "cancel_issue")?.annotations).toMatchObject({
-        destructiveHint: true,
-      });
-      expect(toolByName(tools, "cancel_issue")?._meta?.["openb2c/confirmation"]).toMatchObject({
-        required: true,
-        severity: "warning",
-        title: "Cancel issue",
-      });
-
-      const listResult = await mcp.callTool("list_issues", {
-        filter: { status: "todo" },
-        sort: "number",
-        order: "asc",
-      }, auth);
-      expect(listResult.isError).toBeUndefined();
-      const issues = JSON.parse(listResult.content[0].text) as {
-        items: { id: number; name: string; status: string }[];
-        total: number;
-      };
-      expect(issues.total).toBe(1);
-      expect(issues.items[0]).toMatchObject({
-        id: 1,
-        name: "Harden generated checkout flow",
-        status: "todo",
-      });
-
-      const started = await mcp.callTool("start_issue", { id: 1 }, auth);
-      expect(started.isError).toBeUndefined();
-      expect(JSON.parse(started.content[0].text)).toMatchObject({ id: 1, status: "in_progress" });
-
-      const db = new Database(dbPath);
-      try {
-        expect(db.query<{ status: string }, []>("SELECT status FROM issue WHERE id = 1").get()).toEqual({ status: "in_progress" });
-        expect(db.query<{ effect_type: string }, []>(
-          "SELECT effect_type FROM openb2c_effect_attempt ORDER BY id",
-        ).all()).toEqual([{ effect_type: "notify" }]);
-      } finally {
-        db.close();
-      }
-    } finally {
-      restoreEnv();
-    }
-  });
 });

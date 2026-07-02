@@ -94,6 +94,9 @@ Relationships are requested by name and resolved by convention during compositio
 The generated schema still receives structured field refs, but module authors usually only write strings:
 
 ```nix
+# Assumes local bindings:
+# F = config.refs.issue;
+# V = config.values.issue;
 tables.issue.creator_id = { type = "integer"; references = "user(id)"; };
 tables.issue.assignee_id = { type = "integer"; references = "user(id)"; };
 
@@ -103,8 +106,13 @@ operations.issue = {
   update.relationships = [ "creator" "assignee" ];
 
   complete = {
-    guard = E.eq (E.f "status") (E.lit "in_review");
-    set = { status = "done"; };
+    guard = E.eq (E.f F.status) (E.lit V.status.in_review);
+    transitions = [{
+      field = F.status;
+      from = [ V.status.in_review ];
+      to = V.status.done;
+    }];
+    set.status.value = V.status.done;
   };
 };
 ```

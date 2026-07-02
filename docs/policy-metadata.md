@@ -1,32 +1,31 @@
-# Role And Policy Metadata
+# Policy Metadata
 
-OpenB2C authorization is still enforced by scopes and record relationships. Role metadata describes intended identity audiences for generated documentation and clients; it is not added to `AuthContext` and generated services do not branch on roles.
-
-The platform provides four default role metadata entries:
-
-- `customer`: authenticated customer self-service identity.
-- `staff`: authenticated staff/operator identity.
-- `service`: user-bound API key or integration identity.
-- `system`: trusted local/system execution with the explicit `*` scope.
-
-Operation policy metadata sits beside the operation:
+Runtime authorization is enforced by scopes, public flags, and record relationships. Policy metadata only describes intended audience and risk for generated docs and clients.
 
 ```nix
 operations.ticket.confirm = {
   policy = {
-    label = "Confirm ticket";
-    description = "Customer or user-bound service confirms a reserved ticket.";
     audiences = [ "customer" "service" ];
     risk = "medium";
   };
-  guard = E.eq (E.f "status") (E.lit "reserved");
+  guard = E.eq (E.f F.status) (E.lit V.status.reserved);
 };
 ```
 
-When `audiences` is omitted, codegen derives it from the enforced policy:
+Supported audiences:
 
-- public operations: `anonymous`, `customer`, `staff`, and `service`
-- relationship-scoped operations: `customer`
-- protected global operations: `staff` and `service`
+- `anonymous`
+- `customer`
+- `staff`
+- `service`
+- `system`
 
-Generated OpenAPI includes `x-openb2c-auth` at the document level and `x-openb2c-policy` on generated REST operations. These extensions are metadata for clients, docs, and future UI behavior. Runtime authorization remains the same scope-plus-relationship check documented in [Authentication And Authorization Principles](./auth-and-authorization.md).
+When `audiences` is omitted, codegen derives it:
+
+- public operations: anonymous/customer/staff/service
+- relationship-scoped operations: customer
+- protected global operations: staff/service
+
+Presentation concerns such as label, grouping, display priority, and confirmation live under `operation.presentation`, not `policy`.
+
+Generated OpenAPI includes `x-openb2c-auth` and `x-openb2c-policy`. Enforcement still follows [Authentication And Authorization](./auth-and-authorization.md).

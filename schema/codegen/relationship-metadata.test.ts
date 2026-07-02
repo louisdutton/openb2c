@@ -76,12 +76,11 @@ function relationshipSchema(): Schema {
 describe("relationship metadata generation", () => {
   test("real examples expose generic relationship metadata", async () => {
     const duchy = await loadExampleSchema("duchyopera");
-    const ticketing = await loadExampleSchema("ticketing");
 
     expect(duchy.tables.performance.venue_id.relationship).toMatchObject({ label: "Venue" });
     expect(duchy.tables.ticket.performance_id.relationship).toMatchObject({ label: "Performance" });
-    expect(ticketing.tables.issue.project_id.relationship).toMatchObject({ label: "Project" });
-    expect(ticketing.tables.comment.author_id.relationship).toMatchObject({ label: "Author" });
+    expect(duchy.tables.production_member.user_id.relationship).toMatchObject({ label: "Person" });
+    expect(duchy.tables.rehearsal_call.role_id.relationship).toMatchObject({ label: "Role" });
   });
 
   test("threads relationship metadata into OpenAPI field extensions", () => {

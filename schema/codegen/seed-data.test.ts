@@ -105,16 +105,15 @@ function clearSeedEnv() {
 describe("seed data generation", () => {
   test("real examples expose reference data and fixtures", async () => {
     const duchy = await loadExample("duchyopera");
-    const ticketing = await loadExample("ticketing");
 
     expect(duchy.seed?.reference.venue[0]).toMatchObject({
       id: 1,
       name: "Hall for Cornwall",
     });
     expect(duchy.seed?.fixtures.performance).toHaveLength(2);
-    expect(ticketing.seed?.fixtures.issue[0]).toMatchObject({
-      name: "Harden generated checkout flow",
-      assignee_id: 2,
+    expect(duchy.seed?.fixtures.production[0]).toMatchObject({
+      id: 1,
+      name: "The Magic Flute",
     });
 
     const referenceSql = genSeedSQL(duchy, "reference");

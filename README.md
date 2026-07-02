@@ -1,190 +1,92 @@
 # OpenB2C
 
-OpenB2C is an opinionated, composable platform for building operational systems for people, families, organisations, and businesses.
+OpenB2C is a declarative generator for composable B2C and operational systems.
 
-The core assumption is that most real-world groups need the same underlying machinery: people, roles, events, resources, documents, tasks, payments, bookings, permissions, notifications, and history. OpenB2C should provide those pieces as reusable, prebuilt functionality that can be composed into a working system, rather than asking each app to invent a schema from scratch.
+Most organisations need the same underlying machinery: users, profiles, events, resources, documents, bookings, payments, permissions, notifications, audit, and admin workflows. OpenB2C provides those pieces as reusable Nix modules and bundles, then generates a working SQLite/Bun application from the evaluated composition.
 
-Nix is the composition layer. A project imports the platform pieces it needs, applies ordinary Nix overrides where necessary, and OpenB2C generates the SQLite schema, TypeScript services, REST API, MCP tools, OpenAPI spec, and web UI from the evaluated configuration.
+## Problem
 
-## Goal
+Bespoke business systems usually repeat the same schema, API, auth, admin, and checkout work. That creates fragile one-off apps and makes every new client feel like a greenfield build.
 
-The near-term goal is to prove that opinionated bundles can compose cleanly in one real pilot app: **Duchy Opera**.
+OpenB2C aims to make those common capabilities prebuilt and composable, while still allowing a specific organisation to assemble the combination it needs.
 
-That pilot needs both public and private functionality:
+## Solution
 
-- Public commerce: performances, ticket sales, checkout, payments, customer entitlements.
-- Private operations: productions, rehearsal scheduling, resource planning, participant calls, production materials, and notifications.
+A project composes modules in Nix. Codegen emits:
 
-Terminology customization is secondary for now. The priority is making the prebuilt pieces work together coherently and safely.
+- SQLite schema and seed SQL
+- TypeScript row/input types
+- service-layer business logic
+- REST API
+- MCP server
+- OpenAPI metadata
+- generated public and admin web UI
+
+The evaluated Nix schema is the source of truth. The generated UI is inferred from the data graph, operations, constraints, field metadata, temporal fields, and commerce/profile conventions. There is no separate hand-written UI schema.
 
 ## Model
 
-OpenB2C is organized around four conceptual layers:
-
 ```text
 primitives
-  Shared product concepts used almost everywhere: principals, events,
-  resources, documents, commerce records, tasks, schedules, and history.
+  Shared concepts such as users, profiles, temporal records, documents,
+  bookings, tickets, payments, notifications, and audit.
 
 capabilities
-  Fixed implementation machinery: auth, checkout, payments, calendar sync,
-  document storage, notifications, audit logging, migrations, and generated UI.
+  Fixed implementation machinery such as auth, checkout, effects,
+  migrations, generated REST/MCP/OpenAPI, and generated UI.
 
 bundles
-  Opinionated combinations of primitives and capabilities:
-  ticketed events, production scheduling, materials library, donations,
-  memberships, appointments, room booking, and issue tracking.
+  Opinionated combinations of primitives and capabilities, such as
+  production scheduling or materials library.
 
 apps
-  Specific compositions for a person, family, organisation, or business.
-  Apps mostly choose bundles and providers, but can also directly orchestrate
-  primitives and capabilities where no existing bundle fits.
+  Concrete compositions for an organisation or individual.
 ```
 
-The preferred path is to import bundles and configure them. Direct primitive and capability composition is available for genuinely app-specific needs or for patterns that have not yet become reusable bundles. Raw schema and custom behavior should be the last resort.
+Foreign keys are the primary structural signal. OpenB2C treats the schema as a graph, not a tree, so a record can appear in every relevant workspace. Profile extensions are inferred from one-to-one required unique FKs, and commerce roles are inferred from FKs, constraints, money fields, status fields, and checkout settings.
 
-### Principals
+## Current Pilot
 
-The platform should avoid assuming that every known person is a login account. The broader concept is a principal:
+Duchy Opera is the first acceptance case:
 
-```text
-principal
-├── person
-├── organisation
-├── group
-└── service
-```
+- public performances and ticket checkout
+- payment intent and payment webhook flow
+- customer-owned bookings and tickets
+- private production scheduling
+- rehearsals, calls, requirement coverage, and materials
+- generated public and private/admin surfaces
 
-A principal may or may not be able to authenticate. Roles are contextual: the same person can be a customer, donor, performer, volunteer, staff member, rehearsal participant, or administrator in different parts of the same app.
+The goal is not to build a Duchy-only app. Duchy Opera is the proving lens for reusable platform modules.
 
-### Events
-
-Events are a central primitive. They should support public and private use cases without creating a new schema for every event type.
-
-```text
-event
-├── kind                  # app-defined: performance, rehearsal, fundraiser
-├── visibility            # public | private
-├── schedule              # single | series | recurring
-├── participation         # none | rsvp | invite_only | ticketed | paid_registration | application
-├── resources             # venues, rooms, people, equipment
-├── materials             # linked documents/assets, optional
-└── workflow              # draft, published, cancelled, completed, etc.
-```
-
-Commerce belongs inside participation where it affects how someone joins an event. Resources are allocations with behavior such as display-only, availability-checking, or reservation/blocking. Materials are linked records, not a separate event mode.
-
-### Admin Surface Inference
-
-Generated admin interfaces should be workflow-first, but they should not require a separate hand-written UI definition. The admin surface should be inferred from the same structural model that defines the backend.
-
-The source of truth is the evaluated entity graph:
-
-```text
-entities
-├── fields
-├── foreign-key relationships
-├── validations
-├── operations
-├── workflows
-└── field metadata
-
-        ↓ inferred
-
-admin surfaces
-├── workspaces around significant graph nodes
-├── related records shown from every relevant perspective
-├── workflow boards from lifecycle operations
-├── calendars from temporal records
-├── matrices from bridge/junction records
-└── dashboards from counts, dates, status, and recent activity
-```
-
-Foreign keys are the primary structural signal. The model is a graph, not a tree: a record can belong to several important perspectives at once. For example, a ticket sits between a user and a performance, so it should be visible from both the customer perspective and the performance/sales perspective.
-
-```text
-user ── ticket ── performance
-
-derived perspectives
-├── Users
-│   └── tickets, bookings, payments, history
-└── Performances
-    └── tickets, bookings, sales state
-```
-
-For Duchy Opera internal operations, the graph should naturally produce production-centred surfaces without manually declaring tabs:
-
-```text
-production
-├── rehearsal
-├── rehearsal_requirement
-├── production_material
-├── production_member ── user ── artist_profile
-└── rehearsal_coverage ── rehearsal
-```
-
-That should infer:
-
-```text
-Productions
-├── overview
-├── rehearsals list/calendar
-├── people
-├── coverage matrix
-└── materials
-```
-
-The first implementation should derive as much as possible from existing declarations and avoid extra metadata. If the graph produces awkward or ambiguous surfaces, additional metadata can be introduced later as semantic hints rather than a parallel UI schema.
-
-Possible future hints:
-
-```text
-bundle membership       # which entities belong to a reusable bundle
-entity prominence       # ordering/visibility, not ownership
-relationship semantics  # owner, participant, resource, author, customer
-field semantics         # start/end, display label, money, status
-view preference         # calendar, matrix, timeline, list
-```
-
-These hints should refine inference only where needed. They should not replace the relationship graph as the main source of structure.
-
-## Current Implementation
-
-The current codebase already implements the lower-level generation path:
+## Repository
 
 ```text
 schema/
-├── base.nix              # current Nix option model
-├── modules/              # current reusable modules and business concepts
+├── base.nix              # Nix option model
 ├── lib/                  # expression and composition helpers
-├── codegen/              # SQL, TypeScript, REST, MCP, OpenAPI, UI generation
-└── ui/                   # generated web component runtime
+├── modules/              # reusable modules
+├── bundles/              # cross-entity bundles
+├── codegen/              # generators and tests
+└── ui/                   # generated UI runtimes
 
 examples/
-├── duchyopera/           # first pilot app
-└── ticketing/            # internal workflow example
+└── duchyopera/           # current pilot
 ```
-
-The architecture is expected to evolve from the current `schema/modules` layout toward clearer primitive, capability, and bundle boundaries. Existing Nix module imports remain the composition mechanism.
 
 ## Commands
 
 ```bash
-# Enter the dev shell
-direnv allow
-
-# Generate an app
+nix develop
 compose examples/duchyopera/composition.nix
-
-# Run the framework test suite from the dev shell
+compose --explain examples/duchyopera/composition.nix
 bun test
+```
 
-# Start the generated Duchy Opera REST server
+Run the Duchy Opera generated server:
+
+```bash
 cd examples/duchyopera
 bun run server
-
-# Start the generated MCP server
-bun run mcp
 ```
 
 ## Stack

@@ -39,12 +39,9 @@ function applySql(db: Database, sql: string) {
 describe("ontology indexes", () => {
   test("example compositions infer performance indexes and preserve explicit uniqueness constraints", async () => {
     const duchyOpera = await loadExampleSchema("duchyopera");
-    const ticketing = await loadExampleSchema("ticketing");
     const duchyInferred = inferPerformanceIndexes(duchyOpera.tables);
-    const ticketingInferred = inferPerformanceIndexes(ticketing.tables);
 
     expect("indexes" in duchyOpera).toBe(false);
-    expect("indexes" in ticketing).toBe(false);
     expect(duchyInferred.ticket?.by_user_status).toEqual({
       columns: ["user_id", "status"],
       unique: false,
@@ -53,13 +50,8 @@ describe("ontology indexes", () => {
       columns: ["venue_id", "starts_at"],
       unique: false,
     });
-    expect(ticketingInferred.issue?.by_project_status).toEqual({
-      columns: ["project_id", "status"],
-      unique: false,
-    });
 
     const duchySql = genSQL(duchyOpera.tables, duchyOpera.constraints);
-    const ticketingSql = genSQL(ticketing.tables, ticketing.constraints);
     expect(duchySql).toContain("CREATE INDEX IF NOT EXISTS ticket_by_user_status ON ticket (user_id, status);");
     expect(duchySql).toContain("CREATE INDEX IF NOT EXISTS performance_by_venue_start ON performance (venue_id, starts_at);");
     expect(duchySql).toContain("CREATE UNIQUE INDEX IF NOT EXISTS performance_artist_unique_pair ON performance_artist (performance_id, user_id);");
@@ -68,15 +60,11 @@ describe("ontology indexes", () => {
     expect(duchySql).toContain("CREATE UNIQUE INDEX IF NOT EXISTS booking_unique_payment_reference ON booking (payment_reference);");
     expect(duchySql).toContain("CREATE UNIQUE INDEX IF NOT EXISTS transaction_unique_reference ON [transaction] (reference);");
     expect(duchySql).toContain("CREATE UNIQUE INDEX IF NOT EXISTS booking_ticket_unique_ticket ON booking_ticket (ticket_id);");
-    expect(ticketingSql).toContain("CREATE INDEX IF NOT EXISTS issue_by_project_status ON issue (project_id, status);");
-    expect(ticketingSql).toContain("CREATE UNIQUE INDEX IF NOT EXISTS issue_label_unique_pair ON issue_label (issue_id, label_id);");
   });
 
   test("junction table unique indexes reject duplicate relationships", async () => {
     const duchyOpera = await loadExampleSchema("duchyopera");
-    const ticketing = await loadExampleSchema("ticketing");
     const duchyDb = new Database(":memory:");
-    const ticketingDb = new Database(":memory:");
 
     try {
       applySql(duchyDb, genSQL(duchyOpera.tables, duchyOpera.constraints));
@@ -97,15 +85,8 @@ describe("ontology indexes", () => {
       expect(() => {
         duchyDb.run("INSERT INTO booking_ticket (booking_id, ticket_id) VALUES (2, 2)");
       }).toThrow();
-
-      applySql(ticketingDb, genSQL(ticketing.tables, ticketing.constraints));
-      ticketingDb.run("INSERT INTO issue_label (issue_id, label_id) VALUES (1, 1)");
-      expect(() => {
-        ticketingDb.run("INSERT INTO issue_label (issue_id, label_id) VALUES (1, 1)");
-      }).toThrow();
     } finally {
       duchyDb.close();
-      ticketingDb.close();
     }
   });
 });

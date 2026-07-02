@@ -45,7 +45,53 @@ describe("relationship convention resolution", () => {
   });
 
   test("requested relationship names resolve to matching user foreign keys", async () => {
-    const schema = await loadExampleSchema("ticketing");
+    const expr = `
+      let
+        lib = import <nixpkgs/lib>;
+        composeLib = import ./schema/lib/compose.nix { inherit lib; };
+        modules = lib.evalModules {
+          modules = [
+            ./schema/base.nix
+            ({ ... }: {
+              tables.user = {
+                id = { type = "integer"; pk = true; auto = true; };
+                name = { type = "text"; required = true; };
+              };
+              tables.project = {
+                id = { type = "integer"; pk = true; auto = true; };
+                owner_id = { type = "integer"; required = true; references = "user(id)"; };
+              };
+              tables.issue = {
+                id = { type = "integer"; pk = true; auto = true; };
+                creator_id = { type = "integer"; required = true; references = "user(id)"; };
+                assignee_id = { type = "integer"; references = "user(id)"; };
+              };
+              tables.comment = {
+                id = { type = "integer"; pk = true; auto = true; };
+                author_id = { type = "integer"; required = true; references = "user(id)"; };
+              };
+              operations.issue = {
+                read.relationships = [ "creator" "assignee" ];
+                create.relationships = [ "creator" ];
+                update.relationships = [ "creator" "assignee" ];
+                start = {};
+                assign.relationships = [];
+              };
+              operations.comment.update.relationships = [ "author" ];
+              operations.comment.edit = {};
+              operations.project.update.relationships = [ "owner" ];
+              operations.project.archive = {};
+            })
+          ];
+        };
+      in {
+        tables = modules.config.tables;
+        operations = composeLib.processOperations modules.config.tables modules.config.relationships modules.config.operations;
+      }
+    `;
+    const result = await nixEvalJson(["--expr", expr]);
+    if (result.exitCode !== 0) throw new Error(result.stderr);
+    const schema = JSON.parse(result.stdout) as Schema;
 
     expect(relationshipFields(schema, "issue", "read")).toEqual(["creator_id", "assignee_id"]);
     expect(relationshipFields(schema, "issue", "create")).toEqual(["creator_id"]);

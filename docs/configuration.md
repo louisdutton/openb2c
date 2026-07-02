@@ -58,4 +58,3 @@ OpenAPI also includes `x-openb2c-integrations` so generated clients and operator
 Example projects also include:
 
 - `examples/duchyopera/.env.example`
-- `examples/ticketing/.env.example`

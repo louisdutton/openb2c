@@ -76,42 +76,6 @@ describe("generated UI browser automation", () => {
     }
   }, TEST_TIMEOUT_MS);
 
-  test("admin app supports the generated ticketing workflow board", async () => {
-    const app = await generateExample("ticketing");
-    const api = await startGeneratedApi(app, { authEnabled: false });
-    const staticApp = startStaticApp(app.uiDir, api.baseUrl);
-    const { context, page, errors } = await newPage();
-
-    try {
-      await page.goto(`${staticApp.baseUrl}/admin/#/workflows/issueWorkflow`, { waitUntil: "domcontentloaded" });
-      await page.getByRole("heading", { name: "Issue workflow" }).waitFor();
-      await page.getByText("Harden generated checkout flow").waitFor();
-
-      expect(await page.getByRole("button", { name: "Submit For Review" }).isDisabled()).toBe(true);
-
-      await page.getByRole("button", { name: "Escalate Issue" }).click();
-      await page.getByText("This will mark the issue as urgent.").waitFor();
-      await page.getByRole("button", { name: "Escalate", exact: true }).click();
-      await page.getByText("Escalate issue completed.").waitFor();
-
-      await page.getByRole("button", { name: "Start" }).click();
-      await page.getByText("Start completed.").waitFor();
-      await page.getByRole("button", { name: "Submit For Review" }).click();
-      await page.getByText("Submit For Review completed.").waitFor();
-      await page.getByRole("button", { name: "Complete" }).click();
-      await page.getByText("Complete completed.").waitFor();
-
-      const doneLane = page.locator(".workflow-lane").filter({ has: page.getByRole("heading", { name: "Done" }) });
-      await doneLane.getByText("Harden generated checkout flow").waitFor();
-      expect(await doneLane.getByRole("button", { name: "Submit For Review" }).isDisabled()).toBe(true);
-      expect(errors).toEqual([]);
-    } finally {
-      await context.close();
-      staticApp.stop();
-      api.stop();
-    }
-  }, TEST_TIMEOUT_MS);
-
   test("admin app supports the generated Duchy Opera production workspace", async () => {
     const app = await generateExample("duchyopera");
     const api = await startGeneratedApi(app, { authEnabled: false });
@@ -186,7 +150,7 @@ describe("generated UI browser automation", () => {
   }, TEST_TIMEOUT_MS);
 });
 
-async function generateExample(example: "duchyopera" | "ticketing"): Promise<GeneratedApp> {
+async function generateExample(example: "duchyopera"): Promise<GeneratedApp> {
   const composition = join(PROJECT_ROOT, "examples", example, "composition.nix");
   const schema = await run(["nix", "eval", "--impure", "--json", "-f", composition]);
   const dir = mkdtempSync(join(tmpdir(), `openb2c-${example}-browser-`));
