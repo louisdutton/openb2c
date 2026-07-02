@@ -82,6 +82,7 @@ function clearEnv() {
   delete process.env.PORT;
   delete process.env.AUTH_ENABLED;
   delete process.env.PAYMENT_WEBHOOK_SECRET;
+  delete process.env.EMAIL_WEBHOOK_URL;
   delete process.env.PAYMENT_PROVIDER;
   delete process.env.PAYMENT_API_KEY;
   delete process.env.STRIPE_SECRET_KEY;
@@ -260,6 +261,15 @@ describe("Duchy Opera commerce workflow", () => {
     process.env.PORT = "0";
     process.env.AUTH_ENABLED = "false";
     process.env.PAYMENT_WEBHOOK_SECRET = "test-webhook-secret";
+    const receiptEmails: unknown[] = [];
+    const email = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        receiptEmails.push(await req.json());
+        return Response.json({ ok: true });
+      },
+    });
+    process.env.EMAIL_WEBHOOK_URL = `http://127.0.0.1:${email.port}`;
 
     const { server } = await import(pathToFileURL(join(dir, "server.ts")).href);
     const services = await import(pathToFileURL(join(dir, "services.ts")).href);
@@ -337,6 +347,21 @@ describe("Duchy Opera commerce workflow", () => {
         status: "paid",
         idempotent: false,
       });
+      expect(receiptEmails).toHaveLength(1);
+      expect(receiptEmails[0]).toMatchObject({
+        channel: "email",
+        template: "receipt",
+        to: "customer",
+        data: {
+          order_id: checkedOut.order_id,
+          transaction_id: payment.transaction_id,
+          reference: payment.reference,
+          amount_pence: 5000,
+          currency: "GBP",
+          customer: { id: 1, email: "ada@example.test", name: "Ada Lovelace" },
+          line_item_ids: checkedOut.line_item_ids,
+        },
+      });
 
       const db = new Database(dbPath);
       try {
@@ -383,6 +408,7 @@ describe("Duchy Opera commerce workflow", () => {
       }
     } finally {
       server.stop(true);
+      email.stop(true);
       clearEnv();
     }
   });

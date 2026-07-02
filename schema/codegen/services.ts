@@ -1762,6 +1762,21 @@ function resolveCommerceUser(inputUserId: number | undefined, auth: T.AuthContex
   return { ok: false, error: "authenticated user required", code: "unauthorized" };
 }
 
+function commerceCustomerForOrder(db: Database, order: Record<string, unknown>): Record<string, unknown> {
+  const id = Number(order[ECOMMERCE.order.user.field]);
+  const customer: Record<string, unknown> = { id };
+  if (!Number.isFinite(id) || !ECOMMERCE.order.userTable) return customer;
+
+  const row = db.query("SELECT * FROM " + ECOMMERCE.order.userTable + " WHERE [id] = ?").get(id) as Record<string, unknown> | null;
+  if (!row) return customer;
+  for (const field of ["email", "name", "phone"]) {
+    if (row[field] !== null && row[field] !== undefined && row[field] !== "") {
+      customer[field] = row[field];
+    }
+  }
+  return customer;
+}
+
 function optionDefinitions(): Record<string, {
   field: { field: string } | null;
   type: string;
@@ -1807,6 +1822,19 @@ function commerceLineItemIdsForOrder(db: Database, orderId: number): number[] {
     "SELECT " + column(ECOMMERCE.orderLine.lineItem) + " AS line_item_id FROM " + ECOMMERCE.orderLine.table +
     " WHERE " + column(ECOMMERCE.orderLine.order) + " = ? ORDER BY id"
   ).all(orderId) as { line_item_id: number }[]).map(row => row.line_item_id);
+}
+
+function commerceReceiptPayload(db: Database, order: Record<string, unknown>, transaction: Record<string, unknown>, reference: string): Record<string, unknown> {
+  const orderId = Number(order.id);
+  return {
+    order_id: orderId,
+    transaction_id: Number(transaction.id),
+    reference,
+    amount_pence: Number(order[ECOMMERCE.order.amount.field]),
+    currency: String(order[ECOMMERCE.order.currency.field]),
+    customer: commerceCustomerForOrder(db, order),
+    line_item_ids: commerceLineItemIdsForOrder(db, orderId),
+  };
 }
 
 export function listCommerceCatalog(db: Database): Result<CommerceCatalogResult> {
@@ -2165,7 +2193,7 @@ export function handleCommercePaymentWebhook(db: Database, input: PaymentWebhook
       data: { ${legacyBookingField}order_id: Number(order.id), transaction_id: Number(transaction.id), status: ECOMMERCE.order.paidStatus, idempotent: false },
       effects: [
         { type: "emit", payload: { event: "commerce.order_paid", order_id: Number(order.id), transaction_id: Number(transaction.id), reference: input.reference } },
-        { type: "notify", payload: { channel: "email", template: "receipt", to: "customer", order_id: Number(order.id), transaction_id: Number(transaction.id) } },
+        { type: "notify", payload: { channel: "email", template: "receipt", to: "customer", ...commerceReceiptPayload(db, order, transaction, input.reference) } },
         { type: "call", payload: { service: "analytics", action: "track_purchase", order_id: Number(order.id), transaction_id: Number(transaction.id), amount_pence: Number(order[ECOMMERCE.order.amount.field]) } },
       ],
     };
