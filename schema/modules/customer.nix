@@ -3,6 +3,7 @@ let
   E = import ../lib/expr.nix;
   F = config.refs.customer;
   V = config.values.customer;
+  ER = config.effectRefs;
 in
 {
   tables.customer = {
@@ -22,6 +23,11 @@ in
     fields = with config.refs.customer; [ email ];
   };
 
+  effectContracts.notifications = {
+    templates.patron_welcome = {};
+    recipients.customer = {};
+  };
+
   # CRUD operations are implicit (generated for all entities)
   # Only define custom operations here
   operations.customer = {
@@ -29,11 +35,9 @@ in
       guard = E.and
         (E.ne (E.f F.customer_type) (E.lit V.customer_type.patron))
         (E.notNull (E.f F.email));
-      set = [
-        { field = F.customer_type; value = V.customer_type.patron; }
-      ];
+      set.customer_type.value = V.customer_type.patron;
       effects = [
-        { notify = { channel = "email"; template = "patron_welcome"; }; }
+        { notify = { template = ER.notifications.templates.patron_welcome; to = ER.notifications.recipients.customer; }; }
       ];
     };
   };

@@ -1,5 +1,6 @@
 import type { AuthConfig, Column, DerivedField, Expr, Operation, Schema } from "./types";
-import { getAppMetadata, hasCommerceWorkflow, hasCommerceBookingAliases, openApiEcommerceMetadata, pascalCase } from "./utils";
+import { inferProfileExtensions } from "./inference";
+import { getAppMetadata, getEcommerceConfig, hasCommerceWorkflow, hasCommerceBookingAliases, openApiEcommerceMetadata, pascalCase } from "./utils";
 import { fieldConstraintRules, inferredConstraintMessage, normalizeConstraints, type FieldConstraintRule } from "./constraints";
 
 const CRUD_ACTIONS = new Set(["read", "create", "update", "delete"]);
@@ -50,7 +51,7 @@ const DEFAULT_AUTH: AuthConfig = {
 };
 
 function defaultOperation(): Operation {
-  return { guard: null, relationships: [], public: false, scope: null, policy: {}, workflow: {}, audit: {}, set: {}, cascade: [], effects: [] };
+  return { guard: null, relationships: [], public: false, scope: null, policy: {}, presentation: {}, audit: {}, transitions: [], set: {}, cascade: [], effects: [] };
 }
 
 function operationFor(ops: Record<string, Operation>, action: string): Operation {
@@ -80,8 +81,6 @@ function operationPolicy(entity: string, action: string, op: Operation): Record<
       field: rel.field.field,
       references: rel.field.references,
     })),
-    ...(policy.label ? { label: policy.label } : {}),
-    ...(policy.description ? { description: policy.description } : {}),
   };
 }
 
@@ -107,23 +106,24 @@ function pluralLabel(label: string): string {
 }
 
 function ecommerceEntityPriorities(schema: Schema): Record<string, number> {
-  if (!schema.ecommerce?.enabled) return {};
+  const commerce = getEcommerceConfig(schema);
+  if (!commerce?.enabled) return {};
   const priorities: Record<string, number> = {};
   const assign = (entity: string | undefined, priority: number) => {
     if (entity && priorities[entity] === undefined) priorities[entity] = priority;
   };
-  assign(schema.ecommerce.catalog?.entity, 10);
-  assign(schema.ecommerce.order?.entity, 20);
-  assign(schema.ecommerce.lineItem?.entity, 30);
-  assign(schema.ecommerce.transaction?.entity, 40);
+  assign(commerce.catalog?.entity, 10);
+  assign(commerce.order?.entity, 20);
+  assign(commerce.lineItem?.entity, 30);
+  assign(commerce.transaction?.entity, 40);
   return priorities;
 }
 
 function workflowPriority(schema: Schema, entity: string): number | null {
   let priority: number | null = null;
-  const groups = schema.workflows?.groups || {};
+  const groups = schema.presentation?.groups || {};
   for (const op of Object.values(schema.operations[entity] || {})) {
-    const group = op.workflow?.group;
+    const group = op.presentation?.group;
     if (!group) continue;
     const groupPriority = groups[group]?.displayPriority;
     if (groupPriority === null || groupPriority === undefined) continue;
@@ -134,8 +134,8 @@ function workflowPriority(schema: Schema, entity: string): number | null {
 
 function hasWorkflowOperations(schema: Schema, entity: string): boolean {
   return Object.values(schema.operations[entity] || {}).some(op => {
-    const workflow = op.workflow || {};
-    return Boolean(workflow.group || workflow.transitions?.length || workflow.audit || workflow.confirmation?.required);
+    const presentation = op.presentation || {};
+    return Boolean(presentation.group || op.transitions?.length || op.audit?.summary || presentation.confirmation?.required);
   });
 }
 
@@ -213,12 +213,15 @@ function openApiNavigationMetadata(schema: Schema): Record<string, unknown> {
 }
 
 function operationWorkflow(op: Operation): Record<string, unknown> | null {
-  const workflow = op.workflow || {};
+  const presentation = op.presentation || {};
   const extension: Record<string, unknown> = {};
-  if (workflow.group) extension.group = workflow.group;
+  if (presentation.label) extension.label = presentation.label;
+  if (presentation.description) extension.description = presentation.description;
+  if (presentation.group) extension.group = presentation.group;
+  if (presentation.displayPriority !== null && presentation.displayPriority !== undefined) extension.displayPriority = presentation.displayPriority;
   if (op.guard) extension.preconditions = operationPreconditions(op.guard);
-  if (workflow.transitions?.length) {
-    extension.transitions = workflow.transitions.map(transition => ({
+  if (op.transitions?.length) {
+    extension.transitions = op.transitions.map(transition => ({
       field: {
         table: transition.field.table,
         field: transition.field.field,
@@ -228,14 +231,14 @@ function operationWorkflow(op: Operation): Record<string, unknown> | null {
       to: transition.to,
     }));
   }
-  if (workflow.audit) {
+  if (op.audit?.summary || op.audit?.detail) {
     extension.audit = {
-      summary: workflow.audit.summary,
-      ...(workflow.audit.detail ? { detail: workflow.audit.detail } : {}),
+      summary: op.audit.summary,
+      ...(op.audit.detail ? { detail: op.audit.detail } : {}),
     };
   }
-  if (workflow.confirmation) {
-    const confirmation = workflow.confirmation;
+  if (presentation.confirmation) {
+    const confirmation = presentation.confirmation;
     if (
       confirmation.required ||
       confirmation.title ||
@@ -353,7 +356,7 @@ function openApiIntegrationMetadata(schema: Schema): Record<string, unknown> | n
 }
 
 function openApiWorkflowMetadata(schema: Schema): Record<string, unknown> | null {
-  const groups = schema.workflows?.groups || {};
+  const groups = schema.presentation?.groups || {};
   const operationWorkflows: Record<string, Record<string, unknown>> = {};
   for (const entity of Object.keys(schema.tables || {})) {
     const ops = schema.operations?.[entity] || {};
@@ -394,6 +397,22 @@ function openApiValidationMetadata(schema: Schema): Record<string, unknown> | nu
   }
   if (Object.keys(logicalConstraints).length === 0) return null;
   return { constraints: logicalConstraints };
+}
+
+function openApiProfileMetadata(schema: Schema): Record<string, unknown> | null {
+  const extensions = inferProfileExtensions(schema);
+  if (extensions.length === 0) return null;
+  return {
+    extensions: extensions.map((extension) => ({
+      entity: extension.entity,
+      parentEntity: extension.parentEntity,
+      field: {
+        table: extension.field.table,
+        field: extension.field.field,
+        references: extension.field.references,
+      },
+    })),
+  };
 }
 
 function errorResponse(description: string): unknown {
@@ -488,7 +507,7 @@ function commerceOptionValueSchema(option: {
 }
 
 function commerceOptionsSchema(schema: Schema): Record<string, unknown> {
-  const options = schema.ecommerce?.lineItem.options || {};
+  const options = getEcommerceConfig(schema)?.lineItem.options || {};
   const properties: Record<string, unknown> = {};
   const required: string[] = [];
   for (const [name, option] of Object.entries(options)) {
@@ -630,7 +649,7 @@ function operationRequestSchema(): Record<string, unknown> {
 }
 
 function operationResultSchema(op: Operation): Record<string, unknown> {
-  const status = op.set?.status;
+  const status = op.set?.status?.value;
   return {
     type: "object",
     properties: {
@@ -675,6 +694,7 @@ export function genOpenAPI(schema: Schema): string {
   const integrationMetadata = openApiIntegrationMetadata(schema);
   const validationMetadata = openApiValidationMetadata(schema);
   const ecommerceMetadata = openApiEcommerceMetadata(schema);
+  const profileMetadata = openApiProfileMetadata(schema);
   const navigationMetadata = openApiNavigationMetadata(schema);
   const paths: Record<string, unknown> = {};
   const schemas: Record<string, unknown> = {};
@@ -956,7 +976,7 @@ export function genOpenAPI(schema: Schema): string {
   }
 
   if (hasCommerceWorkflow(schema)) {
-    const checkout = schema.ecommerce?.checkout;
+    const checkout = getEcommerceConfig(schema)?.checkout;
     schemas.CommerceCartItemOptions = commerceOptionsSchema(schema);
     schemas.CommerceCartItemInput = {
       type: "object",
@@ -1224,6 +1244,7 @@ export function genOpenAPI(schema: Schema): string {
     ...(workflowMetadata ? { "x-openb2c-workflows": workflowMetadata } : {}),
     ...(integrationMetadata ? { "x-openb2c-integrations": integrationMetadata } : {}),
     ...(validationMetadata ? { "x-openb2c-validation": validationMetadata } : {}),
+    ...(profileMetadata ? { "x-openb2c-profiles": profileMetadata } : {}),
     ...(ecommerceMetadata ? { "x-openb2c-ecommerce": ecommerceMetadata } : {}),
     "x-openb2c-navigation": navigationMetadata,
     "x-openb2c-api-versioning": {

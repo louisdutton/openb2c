@@ -45,13 +45,13 @@ function col(overrides: Partial<Column>): Column {
 }
 
 function op(overrides: Partial<Operation> = {}): Operation {
-  return { guard: null, relationships: [], public: false, scope: null, policy: {}, workflow: {}, set: {}, cascade: [], effects: [], ...overrides };
+  return { guard: null, relationships: [], public: false, scope: null, policy: {}, presentation: {}, transitions: [], set: {}, cascade: [], effects: [], ...overrides };
 }
 
 function workflowSchema(): Schema {
   return {
     organization: { name: "Workflow Test", description: "Workflow test app", logo: null },
-    workflows: {
+    presentation: {
       groups: {
         ticketLifecycle: {
           label: "Ticket lifecycle",
@@ -73,18 +73,9 @@ function workflowSchema(): Schema {
       ticket: {
         cancel: op({
           guard: { _t: "bin", op: "==", left: { _t: "field", name: "status" }, right: { _t: "lit", value: "reserved" } },
-          set: { status: "cancelled" },
-          workflow: {
+          set: { status: { value: "cancelled" } },
+          presentation: {
             group: "ticketLifecycle",
-            transitions: [{
-              field: { table: "ticket", field: "status", references: null },
-              from: ["reserved", "confirmed"],
-              to: "cancelled",
-            }],
-            audit: {
-              summary: "Cancelled ticket",
-              detail: "Cancelled a customer ticket.",
-            },
             confirmation: {
               required: true,
               title: "Cancel ticket",
@@ -92,6 +83,15 @@ function workflowSchema(): Schema {
               confirmLabel: "Cancel ticket",
               severity: "warning",
             },
+          },
+          transitions: [{
+            field: { table: "ticket", field: "status", references: null },
+            from: ["reserved", "confirmed"],
+            to: "cancelled",
+          }],
+          audit: {
+            summary: "Cancelled ticket",
+            detail: "Cancelled a customer ticket.",
           },
         }),
       },
@@ -103,21 +103,21 @@ describe("workflow metadata generation", () => {
   test("real examples expose workflow groups, transitions, audit text, and confirmations", async () => {
     const schema = await loadDuchyOperaSchema();
 
-    expect(schema.workflows?.groups.ticketLifecycle).toMatchObject({
+    expect(schema.presentation?.groups.ticketLifecycle).toMatchObject({
       label: "Ticket lifecycle",
       displayPriority: 20,
     });
-    expect(schema.workflows?.groups.performanceLifecycle.label).toBe("Performance lifecycle");
-    expect(schema.operations.ticket.cancel.workflow?.transitions?.[0]).toMatchObject({
+    expect(schema.presentation?.groups.performanceLifecycle.label).toBe("Performance lifecycle");
+    expect(schema.operations.ticket.cancel.transitions?.[0]).toMatchObject({
       field: { table: "ticket", field: "status" },
       from: ["reserved", "confirmed"],
       to: "cancelled",
     });
-    expect(schema.operations.performance.cancel.workflow?.confirmation).toMatchObject({
+    expect(schema.operations.performance.cancel.presentation?.confirmation).toMatchObject({
       required: true,
       severity: "danger",
     });
-    expect(schema.operations.transaction.refund.workflow?.audit?.summary).toBe("Refunded transaction");
+    expect(schema.operations.transaction.refund.audit?.summary).toBe("Refunded transaction");
   });
 
   test("OpenAPI includes document workflow metadata and per-operation workflow extensions", () => {
@@ -155,32 +155,32 @@ describe("workflow metadata generation", () => {
 
   test("validates malformed workflow metadata", () => {
     const schema = workflowSchema();
-    schema.operations.ticket.cancel.workflow = {
+    schema.operations.ticket.cancel.presentation = {
       group: "missingGroup",
-      transitions: [
-        {
-          field: { table: "ticket", field: "status", references: null },
-          from: [],
-          to: "void",
-        },
-        {
-          field: { table: "user", field: "id", references: null },
-          from: ["reserved"],
-          to: "cancelled",
-        },
-      ],
       confirmation: {
         required: true,
         severity: "critical" as any,
       },
     };
+    schema.operations.ticket.cancel.transitions = [
+      {
+        field: { table: "ticket", field: "status", references: null },
+        from: [],
+        to: "void",
+      },
+      {
+        field: { table: "user", field: "id", references: null },
+        from: ["reserved"],
+        to: "cancelled",
+      },
+    ];
 
     expect(validateSchema(schema)).toEqual(expect.arrayContaining([
-      expect.objectContaining({ path: "operations.ticket.cancel.workflow.group" }),
-      expect.objectContaining({ path: "operations.ticket.cancel.workflow.transitions.0.from" }),
-      expect.objectContaining({ path: "operations.ticket.cancel.workflow.transitions.0.to" }),
-      expect.objectContaining({ path: "operations.ticket.cancel.workflow.transitions.1.field.table" }),
-      expect.objectContaining({ path: "operations.ticket.cancel.workflow.confirmation.severity" }),
+      expect.objectContaining({ path: "operations.ticket.cancel.presentation.group" }),
+      expect.objectContaining({ path: "operations.ticket.cancel.transitions.0.from" }),
+      expect.objectContaining({ path: "operations.ticket.cancel.transitions.0.to" }),
+      expect.objectContaining({ path: "operations.ticket.cancel.transitions.1.field.table" }),
+      expect.objectContaining({ path: "operations.ticket.cancel.presentation.confirmation.severity" }),
     ]));
   });
 });

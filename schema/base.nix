@@ -99,31 +99,31 @@ let
     };
   };
 
-  workflowGroupType = lib.types.submodule {
+  presentationGroupType = lib.types.submodule {
     options = {
       label = lib.mkOption {
         type = lib.types.str;
-        description = "Human-readable workflow group label.";
+        description = "Human-readable operation group label.";
       };
       description = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         default = null;
-        description = "Optional workflow group description.";
+        description = "Optional operation group description.";
       };
       displayPriority = lib.mkOption {
         type = lib.types.nullOr lib.types.int;
         default = null;
-        description = "Lower values appear earlier in generated workflow displays.";
+        description = "Lower values appear earlier in generated operation displays.";
       };
     };
   };
 
-  workflowsType = lib.types.submodule {
+  presentationType = lib.types.submodule {
     options = {
       groups = lib.mkOption {
-        type = lib.types.attrsOf workflowGroupType;
+        type = lib.types.attrsOf presentationGroupType;
         default = {};
-        description = "Reusable operation group metadata for generated workflow clients.";
+        description = "Reusable operation group metadata for generated clients.";
       };
     };
   };
@@ -657,153 +657,12 @@ let
     };
   };
 
-  ecommerceOptionType = lib.types.submodule {
-    options = {
-      field = lib.mkOption {
-        type = lib.types.nullOr fieldRefType;
-        default = null;
-        description = "Optional target field this configurable purchase option writes to.";
-      };
-      type = lib.mkOption {
-        type = lib.types.str;
-        default = "text";
-        description = "UI/input type for this option.";
-      };
-      label = lib.mkOption {
-        type = lib.types.nullOr lib.types.str;
-        default = null;
-        description = "Human-readable option label.";
-      };
-      default = lib.mkOption {
-        type = lib.types.nullOr lib.types.str;
-        default = null;
-        description = "Default option value.";
-      };
-      choices = lib.mkOption {
-        type = lib.types.listOf lib.types.str;
-        default = [];
-        description = "Allowed user-facing choices, when finite.";
-      };
-      required = lib.mkOption {
-        type = lib.types.bool;
-        default = false;
-        description = "Whether this option must be provided.";
-      };
-      min = lib.mkOption {
-        type = lib.types.nullOr lib.types.int;
-        default = null;
-        description = "Minimum numeric value.";
-      };
-      max = lib.mkOption {
-        type = lib.types.nullOr lib.types.int;
-        default = null;
-        description = "Maximum numeric value.";
-      };
-    };
-  };
-
-  ecommerceType = lib.types.submodule {
+  commerceType = lib.types.submodule {
     options = {
       enabled = lib.mkOption {
         type = lib.types.bool;
         default = false;
-        description = "Enable generated catalog, cart, checkout, settlement, and order flows.";
-      };
-      catalog = lib.mkOption {
-        type = lib.types.submodule {
-          options = {
-            entity = lib.mkOption { type = lib.types.str; default = ""; };
-            label = lib.mkOption { type = lib.types.nullOr fieldRefType; default = null; };
-            description = lib.mkOption { type = lib.types.nullOr fieldRefType; default = null; };
-            price = lib.mkOption { type = lib.types.nullOr fieldRefType; default = null; };
-            groupBy = lib.mkOption { type = lib.types.listOf fieldRefType; default = []; };
-            variantFields = lib.mkOption { type = lib.types.listOf fieldRefType; default = []; };
-            availability = lib.mkOption {
-              type = lib.types.submodule {
-                options = {
-                  field = lib.mkOption { type = lib.types.nullOr fieldRefType; default = null; };
-                  available = lib.mkOption { type = lib.types.str; default = "available"; };
-                };
-              };
-              default = {};
-            };
-          };
-        };
-        default = {};
-      };
-      order = lib.mkOption {
-        type = lib.types.submodule {
-          options = {
-            entity = lib.mkOption { type = lib.types.str; default = ""; };
-            user = lib.mkOption { type = lib.types.nullOr fieldRefType; default = null; };
-            status = lib.mkOption { type = lib.types.nullOr fieldRefType; default = null; };
-            amount = lib.mkOption { type = lib.types.nullOr fieldRefType; default = null; };
-            currency = lib.mkOption { type = lib.types.nullOr fieldRefType; default = null; };
-            expiresAt = lib.mkOption { type = lib.types.nullOr fieldRefType; default = null; };
-            paymentReference = lib.mkOption { type = lib.types.nullOr fieldRefType; default = null; };
-            client = lib.mkOption { type = lib.types.nullOr fieldRefType; default = null; };
-            pendingStatus = lib.mkOption { type = lib.types.str; default = "checkout_pending"; };
-            paidStatus = lib.mkOption { type = lib.types.str; default = "paid"; };
-            expiredStatus = lib.mkOption { type = lib.types.str; default = "expired"; };
-            cancelledStatus = lib.mkOption { type = lib.types.str; default = "cancelled"; };
-          };
-        };
-        default = {};
-      };
-      lineItem = lib.mkOption {
-        type = lib.types.submodule {
-          options = {
-            entity = lib.mkOption { type = lib.types.str; default = ""; };
-            catalogItem = lib.mkOption { type = lib.types.nullOr fieldRefType; default = null; };
-            user = lib.mkOption { type = lib.types.nullOr fieldRefType; default = null; };
-            price = lib.mkOption { type = lib.types.nullOr fieldRefType; default = null; };
-            status = lib.mkOption { type = lib.types.nullOr fieldRefType; default = null; };
-            quantity = lib.mkOption { type = lib.types.nullOr fieldRefType; default = null; };
-            reservedStatus = lib.mkOption { type = lib.types.str; default = "reserved"; };
-            fulfilledStatus = lib.mkOption { type = lib.types.str; default = "fulfilled"; };
-            cancelledStatus = lib.mkOption { type = lib.types.str; default = "cancelled"; };
-            options = lib.mkOption { type = lib.types.attrsOf ecommerceOptionType; default = {}; };
-          };
-        };
-        default = {};
-      };
-      orderLine = lib.mkOption {
-        type = lib.types.submodule {
-          options = {
-            entity = lib.mkOption { type = lib.types.str; default = ""; };
-            order = lib.mkOption { type = lib.types.nullOr fieldRefType; default = null; };
-            lineItem = lib.mkOption { type = lib.types.nullOr fieldRefType; default = null; };
-          };
-        };
-        default = {};
-      };
-      transaction = lib.mkOption {
-        type = lib.types.submodule {
-          options = {
-            entity = lib.mkOption { type = lib.types.str; default = ""; };
-            user = lib.mkOption { type = lib.types.nullOr fieldRefType; default = null; };
-            amount = lib.mkOption { type = lib.types.nullOr fieldRefType; default = null; };
-            type = lib.mkOption { type = lib.types.nullOr fieldRefType; default = null; };
-            status = lib.mkOption { type = lib.types.nullOr fieldRefType; default = null; };
-            reference = lib.mkOption { type = lib.types.nullOr fieldRefType; default = null; };
-            client = lib.mkOption { type = lib.types.nullOr fieldRefType; default = null; };
-            purchaseType = lib.mkOption { type = lib.types.str; default = "purchase"; };
-            pendingStatus = lib.mkOption { type = lib.types.str; default = "pending"; };
-            completedStatus = lib.mkOption { type = lib.types.str; default = "completed"; };
-            failedStatus = lib.mkOption { type = lib.types.str; default = "failed"; };
-          };
-        };
-        default = {};
-      };
-      transactionLine = lib.mkOption {
-        type = lib.types.submodule {
-          options = {
-            entity = lib.mkOption { type = lib.types.str; default = ""; };
-            transaction = lib.mkOption { type = lib.types.nullOr fieldRefType; default = null; };
-            lineItem = lib.mkOption { type = lib.types.nullOr fieldRefType; default = null; };
-          };
-        };
-        default = {};
+        description = "Enable inferred catalog, cart, checkout, settlement, and order flows.";
       };
       checkout = lib.mkOption {
         type = lib.types.submodule {
@@ -816,85 +675,161 @@ let
         };
         default = {};
       };
-      compatibility = lib.mkOption {
+    };
+  };
+
+  effectEventContractType = lib.types.submodule {
+    options = {
+      label = lib.mkOption { type = lib.types.nullOr lib.types.str; default = null; };
+    };
+  };
+
+  notificationTemplateContractType = lib.types.submodule {
+    options = {
+      channel = lib.mkOption { type = lib.types.str; default = "email"; };
+      label = lib.mkOption { type = lib.types.nullOr lib.types.str; default = null; };
+    };
+  };
+
+  notificationRecipientContractType = lib.types.submodule {
+    options = {
+      label = lib.mkOption { type = lib.types.nullOr lib.types.str; default = null; };
+    };
+  };
+
+  callActionContractType = lib.types.submodule {
+    options = {
+      label = lib.mkOption { type = lib.types.nullOr lib.types.str; default = null; };
+    };
+  };
+
+  effectContractsType = lib.types.submodule {
+    options = {
+      events = lib.mkOption {
+        type = lib.types.attrsOf effectEventContractType;
+        default = {};
+      };
+      notifications = lib.mkOption {
         type = lib.types.submodule {
           options = {
-            bookingAliases = lib.mkOption {
-              type = lib.types.bool;
-              default = false;
-              description = "Expose deprecated booking-specific commerce aliases for old clients.";
+            templates = lib.mkOption {
+              type = lib.types.attrsOf notificationTemplateContractType;
+              default = {};
+            };
+            recipients = lib.mkOption {
+              type = lib.types.attrsOf notificationRecipientContractType;
+              default = {};
             };
           };
         };
         default = {};
       };
+      calls = lib.mkOption {
+        type = lib.types.attrsOf (lib.types.attrsOf callActionContractType);
+        default = {};
+      };
+    };
+  };
+
+  effectEventRefType = lib.types.submodule {
+    options.event = lib.mkOption { type = lib.types.str; };
+  };
+
+  notificationTemplateRefType = lib.types.submodule {
+    options = {
+      template = lib.mkOption { type = lib.types.str; };
+      channel = lib.mkOption { type = lib.types.str; };
+    };
+  };
+
+  notificationRecipientRefType = lib.types.submodule {
+    options.recipient = lib.mkOption { type = lib.types.str; };
+  };
+
+  callRefType = lib.types.submodule {
+    options = {
+      service = lib.mkOption { type = lib.types.str; };
+      action = lib.mkOption { type = lib.types.str; };
     };
   };
 
   # Effect types
   effectType = lib.types.submodule {
     options = {
-      emit = lib.mkOption { type = lib.types.nullOr lib.types.str; default = null; };
+      emit = lib.mkOption { type = lib.types.nullOr effectEventRefType; default = null; };
       notify = lib.mkOption {
         type = lib.types.nullOr (lib.types.submodule {
           options = {
-            channel = lib.mkOption { type = lib.types.str; };
-            template = lib.mkOption { type = lib.types.str; };
-            to = lib.mkOption { type = lib.types.str; default = "customer"; };
+            template = lib.mkOption { type = notificationTemplateRefType; };
+            to = lib.mkOption { type = notificationRecipientRefType; };
           };
         });
         default = null;
       };
       call = lib.mkOption {
-        type = lib.types.nullOr (lib.types.submodule {
-          options = {
-            service = lib.mkOption { type = lib.types.str; };
-            action = lib.mkOption { type = lib.types.str; };
-          };
-        });
+        type = lib.types.nullOr callRefType;
         default = null;
       };
     };
   };
 
-  # Typed field assignment. The option normalizes back to attrs so codegen stays stable.
+  assignmentValueType = lib.types.oneOf [
+    lib.types.str
+    lib.types.int
+    lib.types.number
+    lib.types.bool
+  ];
+
+  # Typed field assignment. Exactly one source is validated by codegen.
   assignmentType = lib.types.submodule {
     options = {
-      field = lib.mkOption {
-        type = fieldRefType;
-        description = "Structured local field reference to assign.";
-      };
       value = lib.mkOption {
-        type = lib.types.str;
-        description = "Value to assign.";
+        type = lib.types.nullOr assignmentValueType;
+        default = null;
+        description = "Literal value to assign.";
+      };
+      now = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = "Assign the current timestamp.";
+      };
+      expression = lib.mkOption {
+        type = lib.types.nullOr lib.types.attrs;
+        default = null;
+        description = "Expression AST used to compute the assigned value.";
+      };
+      input = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = "Assign from the operation input payload.";
+      };
+      clear = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = "Assign NULL.";
       };
     };
   };
 
-  assignmentSetType = lib.types.either (lib.types.attrsOf lib.types.str) (lib.types.listOf assignmentType);
-  normalizeAssignmentSet = value:
-    if builtins.isList value
-    then lib.listToAttrs (map (assignment: {
-      name = assignment.field.field;
-      value = assignment.value;
-    }) value)
-    else value;
+  assignmentSetType = lib.types.attrsOf assignmentType;
 
   # Cascade update
   cascadeType = lib.types.submodule {
     options = {
-      entity = lib.mkOption { type = lib.types.str; };
-      via = lib.mkOption { type = lib.types.nullOr lib.types.str; default = null; };
+      entity = lib.mkOption { type = tableRefType; };
+      via = lib.mkOption {
+        type = lib.types.nullOr lib.types.attrs;
+        default = null;
+      };
       set = lib.mkOption {
         type = assignmentSetType;
         default = {};
-        apply = normalizeAssignmentSet;
       };
     };
   };
 
   # Operation definition
-  workflowTransitionType = lib.types.submodule {
+  operationTransitionType = lib.types.submodule {
     options = {
       field = lib.mkOption {
         type = fieldRefType;
@@ -912,21 +847,7 @@ let
     };
   };
 
-  workflowAuditType = lib.types.submodule {
-    options = {
-      summary = lib.mkOption {
-        type = lib.types.str;
-        description = "Short audit text for this operation.";
-      };
-      detail = lib.mkOption {
-        type = lib.types.nullOr lib.types.str;
-        default = null;
-        description = "Optional longer audit detail template.";
-      };
-    };
-  };
-
-  workflowConfirmationType = lib.types.submodule {
+  operationConfirmationType = lib.types.submodule {
     options = {
       required = lib.mkOption {
         type = lib.types.bool;
@@ -956,25 +877,30 @@ let
     };
   };
 
-  operationWorkflowType = lib.types.submodule {
+  operationPresentationType = lib.types.submodule {
     options = {
+      label = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = "Human-readable operation label.";
+      };
+      description = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = "Short operation description for generated clients and API docs.";
+      };
       group = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         default = null;
-        description = "Workflow group key from workflows.groups.";
+        description = "Presentation group key from presentation.groups.";
       };
-      transitions = lib.mkOption {
-        type = lib.types.listOf workflowTransitionType;
-        default = [];
-        description = "Allowed record state transitions performed by this operation.";
-      };
-      audit = lib.mkOption {
-        type = lib.types.nullOr workflowAuditType;
+      displayPriority = lib.mkOption {
+        type = lib.types.nullOr lib.types.int;
         default = null;
-        description = "Audit text metadata for this operation.";
+        description = "Lower values appear earlier in generated operation lists.";
       };
       confirmation = lib.mkOption {
-        type = workflowConfirmationType;
+        type = operationConfirmationType;
         default = {};
         description = "Generated client confirmation requirements.";
       };
@@ -983,16 +909,6 @@ let
 
   operationPolicyType = lib.types.submodule {
     options = {
-      label = lib.mkOption {
-        type = lib.types.nullOr lib.types.str;
-        default = null;
-        description = "Human-readable operation policy label.";
-      };
-      description = lib.mkOption {
-        type = lib.types.nullOr lib.types.str;
-        default = null;
-        description = "Short policy description for generated clients and API docs.";
-      };
       audiences = lib.mkOption {
         type = lib.types.listOf audienceType;
         default = [];
@@ -1023,6 +939,16 @@ let
         default = null;
         description = "Why this operation requires audit logging.";
       };
+      summary = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = "Short audit text for this operation.";
+      };
+      detail = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = "Optional longer audit detail template.";
+      };
     };
   };
 
@@ -1051,23 +977,27 @@ let
       policy = lib.mkOption {
         type = operationPolicyType;
         default = {};
-        description = "Policy metadata for generated API descriptions and clients.";
+        description = "Access and risk policy metadata.";
       };
-      workflow = lib.mkOption {
-        type = operationWorkflowType;
+      presentation = lib.mkOption {
+        type = operationPresentationType;
         default = {};
-        description = "Workflow metadata for generated API descriptions and clients.";
+        description = "Generated client and documentation presentation metadata.";
       };
       audit = lib.mkOption {
         type = operationAuditType;
         default = {};
         description = "Audit logging requirement metadata for this operation.";
       };
+      transitions = lib.mkOption {
+        type = lib.types.listOf operationTransitionType;
+        default = [];
+        description = "Allowed record state transitions performed by this operation.";
+      };
       set = lib.mkOption {
         type = assignmentSetType;
         default = {};
-        apply = normalizeAssignmentSet;
-        description = "Fields to update. Prefer typed assignments with structured field references.";
+        description = "Fields to update using typed assignment sources.";
       };
       cascade = lib.mkOption {
         type = lib.types.listOf cascadeType;
@@ -1096,10 +1026,10 @@ in {
       description = "Authentication role and policy metadata.";
     };
 
-    workflows = lib.mkOption {
-      type = workflowsType;
+    presentation = lib.mkOption {
+      type = presentationType;
       default = {};
-      description = "Workflow group metadata for generated clients.";
+      description = "Presentation metadata for generated clients.";
     };
 
     audit = lib.mkOption {
@@ -1118,6 +1048,12 @@ in {
       type = integrationsType;
       default = {};
       description = "System-level external integration configuration metadata.";
+    };
+
+    effectContracts = lib.mkOption {
+      type = effectContractsType;
+      default = {};
+      description = "Declared effect events, notifications, recipients, and service actions.";
     };
 
     tables = lib.mkOption {
@@ -1159,6 +1095,24 @@ in {
       description = "Structured references for finite field values declared by column enum constraints.";
     };
 
+    effectRefs = lib.mkOption {
+      type = lib.types.attrs;
+      default = {
+        events = lib.mapAttrs (event: _contract: { inherit event; }) config.effectContracts.events;
+        notifications = {
+          templates = lib.mapAttrs (template: contract: {
+            inherit template;
+            channel = contract.channel;
+          }) config.effectContracts.notifications.templates;
+          recipients = lib.mapAttrs (recipient: _contract: { inherit recipient; }) config.effectContracts.notifications.recipients;
+        };
+        calls = lib.mapAttrs (service: actions:
+          lib.mapAttrs (action: _contract: { inherit service action; }) actions
+        ) config.effectContracts.calls;
+      };
+      description = "Structured references for declared effects.";
+    };
+
     relationships = lib.mkOption {
       type = lib.types.attrsOf (lib.types.attrsOf relationshipType);
       default = {};
@@ -1177,10 +1131,10 @@ in {
       description = "Operations per entity (e.g., operations.ticket.confirm)";
     };
 
-    ecommerce = lib.mkOption {
-      type = ecommerceType;
+    commerce = lib.mkOption {
+      type = commerceType;
       default = {};
-      description = "Generic catalog/cart/checkout commerce configuration.";
+      description = "Inferred catalog/cart/checkout commerce capability marker.";
     };
   };
 }

@@ -21,6 +21,9 @@ export interface OpenAPISpec {
     groups?: Record<string, WorkflowGroup>;
     operationWorkflows?: Record<string, Record<string, any>>;
   };
+  "x-openb2c-profiles"?: {
+    extensions?: ProfileExtension[];
+  };
 }
 
 export interface NavigationGroup {
@@ -83,6 +86,12 @@ export interface WorkflowGroup {
   label?: string;
   description?: string;
   displayPriority?: number;
+}
+
+export interface ProfileExtension {
+  entity: string;
+  parentEntity: string;
+  field: { table: string; field: string; references: string | null };
 }
 
 export interface WorkflowScreen {

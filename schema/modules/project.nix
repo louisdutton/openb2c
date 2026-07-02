@@ -38,16 +38,12 @@ in
 
     archive = {
       guard = E.eq (E.f F.status) (E.lit V.status.active);
-      set = [
-        { field = F.status; value = V.status.archived; }
-      ];
+      set.status.value = V.status.archived;
     };
 
     unarchive = {
       guard = E.eq (E.f F.status) (E.lit V.status.archived);
-      set = [
-        { field = F.status; value = V.status.active; }
-      ];
+      set.status.value = V.status.active;
     };
   };
 }

@@ -439,14 +439,13 @@ export class ObAdminWorkspace extends HTMLElement {
 
   private _operationViews(api: ObApi, entity: string, record: Record<string, unknown>): OperationView[] {
     return api.getOperations(entity).map((op) => {
-      const policy = api.getOperationPolicy(entity, op) || {};
       const workflow = api.getOperationWorkflow(entity, op) || {};
-      const label = contextualOperationLabel(policy.label || displayOperation(op), entity);
+      const label = contextualOperationLabel(workflow.label || displayOperation(op), entity);
       const availability = operationAvailability(record, workflow, label);
       return {
         op,
         label,
-        description: policy.description || workflow.audit?.summary || "",
+        description: workflow.description || workflow.audit?.summary || "",
         workflow,
         available: availability.available,
         unavailableReason: availability.reason,

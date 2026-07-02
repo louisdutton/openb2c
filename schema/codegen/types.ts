@@ -76,6 +76,10 @@ export type Indexes = Record<string, Record<string, Index>>;
 
 export type Refs = Record<string, Record<string, FieldRef>>;
 
+export interface TableRef {
+  table: string;
+}
+
 export interface Relationship {
   field: FieldRef;
 }
@@ -127,16 +131,44 @@ export interface NormalizedConstraint {
 
 export type NormalizedConstraints = Record<string, Record<string, NormalizedConstraint>>;
 
+export interface FieldAssignment {
+  value?: string | number | boolean | null;
+  now?: boolean;
+  expression?: Expr | null;
+  input?: boolean;
+  clear?: boolean;
+}
+
+export type AssignmentSet = Record<string, FieldAssignment>;
+
 export interface Cascade {
-  entity: string;
-  via: string | null;
-  set: Record<string, string>;
+  entity: TableRef;
+  via: TableRef | FieldRef | null;
+  set: AssignmentSet;
+}
+
+export interface EventRef {
+  event: string;
+}
+
+export interface NotificationTemplateRef {
+  template: string;
+  channel: string;
+}
+
+export interface NotificationRecipientRef {
+  recipient: string;
+}
+
+export interface CallRef {
+  service: string;
+  action: string;
 }
 
 export interface Effect {
-  emit: string | null;
-  notify: { channel: string; template: string; to: string } | null;
-  call: { service: string; action: string } | null;
+  emit: EventRef | null;
+  notify: { template: NotificationTemplateRef; to: NotificationRecipientRef } | null;
+  call: CallRef | null;
 }
 
 export type AuthAudience = "anonymous" | "customer" | "staff" | "service" | "system";
@@ -144,8 +176,6 @@ export type PolicyRisk = "low" | "medium" | "high";
 export type AuditCategory = "data" | "workflow" | "security" | "payment" | "system";
 
 export interface OperationPolicyMetadata {
-  label?: string | null;
-  description?: string | null;
   audiences?: AuthAudience[];
   risk?: PolicyRisk;
 }
@@ -154,6 +184,8 @@ export interface OperationAuditMetadata {
   required?: boolean;
   category?: AuditCategory;
   reason?: string | null;
+  summary?: string | null;
+  detail?: string | null;
 }
 
 export interface Operation {
@@ -162,16 +194,17 @@ export interface Operation {
   public: boolean;
   scope: string | null;
   policy?: OperationPolicyMetadata;
-  workflow?: OperationWorkflowMetadata;
+  presentation?: OperationPresentationMetadata;
   audit?: OperationAuditMetadata;
-  set: Record<string, string>;
+  transitions?: OperationTransitionMetadata[];
+  set: AssignmentSet;
   cascade: Cascade[];
   effects: Effect[];
 }
 
 export type Operations = Record<string, Record<string, Operation>>;
 
-export interface EcommerceOption {
+export interface CommerceOption {
   field: FieldRef | null;
   type: string;
   label: string | null;
@@ -182,7 +215,7 @@ export interface EcommerceOption {
   max: number | null;
 }
 
-export interface EcommerceCatalogConfig {
+export interface CommerceCatalogConfig {
   entity: string;
   label: FieldRef | null;
   description: FieldRef | null;
@@ -195,7 +228,7 @@ export interface EcommerceCatalogConfig {
   };
 }
 
-export interface EcommerceOrderConfig {
+export interface CommerceOrderConfig {
   entity: string;
   user: FieldRef | null;
   status: FieldRef | null;
@@ -210,7 +243,7 @@ export interface EcommerceOrderConfig {
   cancelledStatus: string;
 }
 
-export interface EcommerceLineItemConfig {
+export interface CommerceLineItemConfig {
   entity: string;
   catalogItem: FieldRef | null;
   user: FieldRef | null;
@@ -220,17 +253,17 @@ export interface EcommerceLineItemConfig {
   reservedStatus: string;
   fulfilledStatus: string;
   cancelledStatus: string;
-  options: Record<string, EcommerceOption>;
+  options: Record<string, CommerceOption>;
 }
 
-export interface EcommerceLinkConfig {
+export interface CommerceLinkConfig {
   entity: string;
   order?: FieldRef | null;
   transaction?: FieldRef | null;
   lineItem: FieldRef | null;
 }
 
-export interface EcommerceTransactionConfig {
+export interface CommerceTransactionConfig {
   entity: string;
   user: FieldRef | null;
   amount: FieldRef | null;
@@ -244,25 +277,30 @@ export interface EcommerceTransactionConfig {
   failedStatus: string;
 }
 
-export interface EcommerceCompatibilityConfig {
-  bookingAliases: boolean;
-}
-
-export interface EcommerceConfig {
+export interface InferredCommerceConfig {
   enabled: boolean;
-  catalog: EcommerceCatalogConfig;
-  order: EcommerceOrderConfig;
-  lineItem: EcommerceLineItemConfig;
-  orderLine: EcommerceLinkConfig;
-  transaction: EcommerceTransactionConfig;
-  transactionLine: EcommerceLinkConfig;
+  catalog: CommerceCatalogConfig;
+  order: CommerceOrderConfig;
+  lineItem: CommerceLineItemConfig;
+  orderLine: CommerceLinkConfig;
+  transaction: CommerceTransactionConfig;
+  transactionLine: CommerceLinkConfig;
   checkout: {
     currency: string;
     expiryMinutes: number;
     maxQuantity: number;
     maxLines: number;
   };
-  compatibility?: EcommerceCompatibilityConfig;
+}
+
+export interface CommerceConfig {
+  enabled: boolean;
+  checkout: {
+    currency: string;
+    expiryMinutes: number;
+    maxQuantity: number;
+    maxLines: number;
+  };
 }
 
 export interface OrganizationLogoMetadata {
@@ -355,30 +393,51 @@ export interface IntegrationsConfig {
   webhookEffects: WebhookIntegrationMetadata;
 }
 
+export interface EffectEventContract {
+  label?: string | null;
+}
+
+export interface NotificationTemplateContract {
+  channel: string;
+  label?: string | null;
+}
+
+export interface NotificationRecipientContract {
+  label?: string | null;
+}
+
+export interface CallActionContract {
+  label?: string | null;
+}
+
+export interface EffectContracts {
+  events: Record<string, EffectEventContract>;
+  notifications: {
+    templates: Record<string, NotificationTemplateContract>;
+    recipients: Record<string, NotificationRecipientContract>;
+  };
+  calls: Record<string, Record<string, CallActionContract>>;
+}
+
 export type WorkflowConfirmationSeverity = "info" | "warning" | "danger";
 
-export interface WorkflowGroupMetadata {
+export interface PresentationGroupMetadata {
   label: string;
   description?: string | null;
   displayPriority?: number | null;
 }
 
-export interface WorkflowConfig {
-  groups: Record<string, WorkflowGroupMetadata>;
+export interface PresentationConfig {
+  groups: Record<string, PresentationGroupMetadata>;
 }
 
-export interface WorkflowTransitionMetadata {
+export interface OperationTransitionMetadata {
   field: FieldRef;
   from: string[];
   to: string;
 }
 
-export interface WorkflowAuditMetadata {
-  summary: string;
-  detail?: string | null;
-}
-
-export interface WorkflowConfirmationMetadata {
+export interface OperationConfirmationMetadata {
   required: boolean;
   title?: string | null;
   message?: string | null;
@@ -386,11 +445,18 @@ export interface WorkflowConfirmationMetadata {
   severity?: WorkflowConfirmationSeverity;
 }
 
-export interface OperationWorkflowMetadata {
+export interface OperationPresentationMetadata {
+  label?: string | null;
+  description?: string | null;
   group?: string | null;
-  transitions?: WorkflowTransitionMetadata[];
-  audit?: WorkflowAuditMetadata | null;
-  confirmation?: WorkflowConfirmationMetadata;
+  displayPriority?: number | null;
+  confirmation?: OperationConfirmationMetadata;
+}
+
+export interface ProfileExtension {
+  entity: string;
+  parentEntity: string;
+  field: FieldRef;
 }
 
 export interface Schema {
@@ -399,12 +465,15 @@ export interface Schema {
   audit?: AuditConfig;
   seed?: SeedConfig;
   integrations?: IntegrationsConfig;
-  workflows?: WorkflowConfig;
+  effectContracts?: EffectContracts;
+  presentation?: PresentationConfig;
   tables: Tables;
   derived?: DerivedFields;
   constraints?: Constraints;
   refs?: Refs;
+  entityRefs?: Record<string, TableRef>;
   relationships?: Relationships;
+  profileExtensions?: ProfileExtension[];
   operations: Operations;
-  ecommerce?: EcommerceConfig;
+  commerce?: CommerceConfig;
 }

@@ -1,5 +1,6 @@
-import type { Cascade, Column, ConstraintEnforcement, Expr, FieldRef, Operation, Schema, SeedValue, Tables } from "./types";
+import type { AssignmentSet, Cascade, Column, ConstraintEnforcement, Effect, Expr, FieldAssignment, FieldRef, Operation, Schema, SeedValue, TableRef, Tables } from "./types";
 import { normalizeConstraints } from "./constraints";
+import { inferCommerce } from "./inference";
 
 export interface SchemaDiagnostic {
   path: string;
@@ -33,6 +34,8 @@ export function assertValidSchema(schema: Schema): void {
 export function validateSchema(schema: Schema): SchemaDiagnostic[] {
   const diagnostics: SchemaDiagnostic[] = [];
   const tables = schema.tables || {};
+  if ((schema as any).workflows !== undefined) add(diagnostics, "workflows", "has been replaced by presentation.groups");
+  if ((schema as any).ecommerce !== undefined) add(diagnostics, "ecommerce", "has been replaced by commerce");
   const normalized = {
     ...schema,
     tables,
@@ -40,9 +43,11 @@ export function validateSchema(schema: Schema): SchemaDiagnostic[] {
     audit: schema.audit || { entities: {} },
     seed: schema.seed || { reference: {}, fixtures: {}, applyFixturesByDefault: false },
     integrations: schema.integrations,
+    effectContracts: schema.effectContracts || { events: {}, notifications: { templates: {}, recipients: {} }, calls: {} },
     operations: schema.operations || {},
     constraints: schema.constraints || {},
-    workflows: schema.workflows || { groups: {} },
+    presentation: schema.presentation || { groups: {} },
+    commerce: schema.commerce || { enabled: false, checkout: { currency: "GBP", expiryMinutes: 15, maxQuantity: 20, maxLines: 50 } },
   } as Schema;
 
   if (!schema.tables) add(diagnostics, "tables", "is required");
@@ -53,11 +58,12 @@ export function validateSchema(schema: Schema): SchemaDiagnostic[] {
   validateAudit(normalized, diagnostics);
   validateSeed(normalized, diagnostics);
   validateIntegrations(normalized, diagnostics);
+  validateEffectContracts(normalized, diagnostics);
   validateConstraints(normalized, diagnostics);
   validateRelationships(normalized, diagnostics);
-  validateWorkflows(normalized, diagnostics);
+  validatePresentation(normalized, diagnostics);
   validateOperations(normalized, diagnostics);
-  validateEcommerce(normalized, diagnostics);
+  validateCommerce(normalized, diagnostics);
 
   return diagnostics;
 }
@@ -223,6 +229,11 @@ function validateColumnRelationship(schema: Schema, table: string, field: string
   if (!parsed) return;
   if (relationship.cardinality && !["one", "many"].includes(relationship.cardinality)) {
     add(diagnostics, `tables.${table}.${field}.relationship.cardinality`, "must be one of one or many");
+  }
+  for (const key of Object.keys(relationship as Record<string, unknown>)) {
+    if (!["label", "description", "cardinality"].includes(key)) {
+      add(diagnostics, `tables.${table}.${field}.relationship.${key}`, "relationship metadata can only override label, description, or cardinality");
+    }
   }
 }
 
@@ -461,17 +472,25 @@ function validateIntegrations(schema: Schema, diagnostics: SchemaDiagnostic[]): 
   }
 }
 
-function validateWorkflows(schema: Schema, diagnostics: SchemaDiagnostic[]): void {
-  for (const [name, group] of Object.entries(schema.workflows?.groups || {})) {
+function validateEffectContracts(schema: Schema, diagnostics: SchemaDiagnostic[]): void {
+  const contracts = schema.effectContracts;
+  if (!contracts) return;
+  for (const [name, template] of Object.entries(contracts.notifications?.templates || {})) {
+    if (!template.channel) add(diagnostics, `effectContracts.notifications.templates.${name}.channel`, "is required");
+  }
+}
+
+function validatePresentation(schema: Schema, diagnostics: SchemaDiagnostic[]): void {
+  for (const [name, group] of Object.entries(schema.presentation?.groups || {})) {
     if (!group.label) {
-      add(diagnostics, `workflows.groups.${name}.label`, "is required");
+      add(diagnostics, `presentation.groups.${name}.label`, "is required");
     }
     if (
       group.displayPriority !== null &&
       group.displayPriority !== undefined &&
       !Number.isFinite(group.displayPriority)
     ) {
-      add(diagnostics, `workflows.groups.${name}.displayPriority`, "must be a finite number");
+      add(diagnostics, `presentation.groups.${name}.displayPriority`, "must be a finite number");
     }
   }
 }
@@ -546,19 +565,22 @@ function validateOperations(schema: Schema, diagnostics: SchemaDiagnostic[]): vo
 
 function validateOperation(schema: Schema, entity: string, name: string, operation: Operation, diagnostics: SchemaDiagnostic[]): void {
   const path = `operations.${entity}.${name}`;
-  validateOperationPolicy(operation, `${path}.policy`, diagnostics);
-  validateOperationWorkflow(schema, entity, operation, `${path}.workflow`, diagnostics);
-  validateOperationAudit(operation, `${path}.audit`, diagnostics);
-  for (const [field] of Object.entries(operation.set || {})) {
-    if (!columnExists(schema.tables, entity, field)) {
-      add(diagnostics, `${path}.set.${field}`, `references unknown field ${entity}.${field}`);
-    }
+  if ((operation as any).workflow !== undefined) {
+    add(diagnostics, `${path}.workflow`, "has been replaced by presentation, transitions, and audit");
   }
+  validateOperationPolicy(operation, `${path}.policy`, diagnostics);
+  validateOperationPresentation(schema, operation, `${path}.presentation`, diagnostics);
+  validateOperationTransitions(schema, entity, operation, `${path}.transitions`, diagnostics);
+  validateOperationAudit(operation, `${path}.audit`, diagnostics);
+  validateAssignmentSet(schema, entity, operation.set || {}, `${path}.set`, diagnostics);
   for (const [index, relationship] of (operation.relationships || []).entries()) {
     validateFieldRef(schema, relationship.field, `${path}.relationships.${index}.field`, diagnostics, entity);
   }
   for (const [index, cascade] of (operation.cascade || []).entries()) {
     validateCascade(schema, entity, cascade, `${path}.cascade.${index}`, diagnostics);
+  }
+  for (const [index, effect] of (operation.effects || []).entries()) {
+    validateEffect(schema, effect, `${path}.effects.${index}`, diagnostics);
   }
   validateGuard(schema, entity, operation.guard, `${path}.guard`, diagnostics);
 }
@@ -571,16 +593,27 @@ function validateOperationAudit(operation: Operation, path: string, diagnostics:
   }
 }
 
-function validateOperationWorkflow(schema: Schema, entity: string, operation: Operation, path: string, diagnostics: SchemaDiagnostic[]): void {
-  const workflow = operation.workflow;
-  if (!workflow) return;
-
-  if (workflow.group && !schema.workflows?.groups?.[workflow.group]) {
-    add(diagnostics, `${path}.group`, `references unknown workflow group ${JSON.stringify(workflow.group)}`);
+function validateOperationPresentation(schema: Schema, operation: Operation, path: string, diagnostics: SchemaDiagnostic[]): void {
+  const presentation = operation.presentation;
+  if (!presentation) return;
+  if (presentation.group && !schema.presentation?.groups?.[presentation.group]) {
+    add(diagnostics, `${path}.group`, `references unknown presentation group ${JSON.stringify(presentation.group)}`);
   }
+  if (
+    presentation.displayPriority !== null &&
+    presentation.displayPriority !== undefined &&
+    !Number.isFinite(presentation.displayPriority)
+  ) {
+    add(diagnostics, `${path}.displayPriority`, "must be a finite number");
+  }
+  if (presentation.confirmation?.severity && !["info", "warning", "danger"].includes(presentation.confirmation.severity)) {
+    add(diagnostics, `${path}.confirmation.severity`, "must be one of info, warning, or danger");
+  }
+}
 
-  for (const [index, transition] of (workflow.transitions || []).entries()) {
-    const transitionPath = `${path}.transitions.${index}`;
+function validateOperationTransitions(schema: Schema, entity: string, operation: Operation, path: string, diagnostics: SchemaDiagnostic[]): void {
+  for (const [index, transition] of (operation.transitions || []).entries()) {
+    const transitionPath = `${path}.${index}`;
     validateFieldRef(schema, transition.field, `${transitionPath}.field`, diagnostics, entity);
     if (!transition.from || transition.from.length === 0) {
       add(diagnostics, `${transitionPath}.from`, "must include at least one source value");
@@ -589,15 +622,12 @@ function validateOperationWorkflow(schema: Schema, entity: string, operation: Op
       add(diagnostics, `${transitionPath}.to`, "is required");
     }
     const fieldName = transition.field?.field;
-    if (fieldName && operation.set && fieldName in operation.set && operation.set[fieldName] !== transition.to) {
-      add(diagnostics, `${transitionPath}.to`, `does not match operation set value ${JSON.stringify(operation.set[fieldName])}`);
+    const assignment = fieldName ? operation.set?.[fieldName] : null;
+    if (fieldName && assignment && assignment.value !== transition.to) {
+      add(diagnostics, `${transitionPath}.to`, `does not match operation set value ${JSON.stringify(assignment.value)}`);
     } else if (fieldName && operation.set && !(fieldName in operation.set)) {
       add(diagnostics, `${transitionPath}.field`, `must be set by the operation`);
     }
-  }
-
-  if (workflow.confirmation?.severity && !["info", "warning", "danger"].includes(workflow.confirmation.severity)) {
-    add(diagnostics, `${path}.confirmation.severity`, "must be one of info, warning, or danger");
   }
 }
 
@@ -612,42 +642,103 @@ function validateOperationPolicy(operation: Operation, path: string, diagnostics
   if (policy.risk && !["low", "medium", "high"].includes(policy.risk)) {
     add(diagnostics, `${path}.risk`, "must be one of low, medium, or high");
   }
+  if ((policy as any).label !== undefined || (policy as any).description !== undefined) {
+    add(diagnostics, path, "policy can only contain access/security metadata; use presentation for labels and descriptions");
+  }
   if (operation.public && policy.audiences?.length && !policy.audiences.includes("anonymous")) {
     add(diagnostics, `${path}.audiences`, "public operations should include anonymous when audiences are set explicitly");
   }
 }
 
+function validateAssignmentSet(schema: Schema, entity: string, set: AssignmentSet, path: string, diagnostics: SchemaDiagnostic[]): void {
+  for (const [field, assignment] of Object.entries(set || {})) {
+    if (!columnExists(schema.tables, entity, field)) {
+      add(diagnostics, `${path}.${field}`, `references unknown field ${entity}.${field}`);
+      continue;
+    }
+    validateAssignment(schema, entity, assignment, `${path}.${field}`, diagnostics);
+  }
+}
+
+function validateAssignment(schema: Schema, entity: string, assignment: FieldAssignment, path: string, diagnostics: SchemaDiagnostic[]): void {
+  const sources = [
+    assignment.value !== null && assignment.value !== undefined,
+    assignment.now === true,
+    assignment.expression !== null && assignment.expression !== undefined,
+    assignment.input === true,
+    assignment.clear === true,
+  ].filter(Boolean).length;
+  if (sources !== 1) {
+    add(diagnostics, path, "must declare exactly one assignment source: value, now, expression, input, or clear");
+  }
+  if (assignment.expression) validateGuard(schema, entity, assignment.expression, `${path}.expression`, diagnostics);
+}
+
 function validateCascade(schema: Schema, sourceEntity: string, cascade: Cascade, path: string, diagnostics: SchemaDiagnostic[]): void {
-  if (!tableExists(schema.tables, cascade.entity)) {
-    add(diagnostics, `${path}.entity`, `references unknown entity ${JSON.stringify(cascade.entity)}`);
+  const targetEntity = tableRefName(cascade.entity);
+  if (!targetEntity || !tableExists(schema.tables, targetEntity)) {
+    add(diagnostics, `${path}.entity`, `references unknown entity ${JSON.stringify(targetEntity || cascade.entity)}`);
     return;
   }
-  for (const [field] of Object.entries(cascade.set || {})) {
-    if (!columnExists(schema.tables, cascade.entity, field)) {
-      add(diagnostics, `${path}.set.${field}`, `references unknown field ${cascade.entity}.${field}`);
-    }
-  }
+  validateAssignmentSet(schema, targetEntity, cascade.set || {}, `${path}.set`, diagnostics);
   if (!cascade.via) {
     const fallback = `${sourceEntity}_id`;
-    if (!columnExists(schema.tables, cascade.entity, fallback)) {
-      add(diagnostics, `${path}.via`, `is omitted, but ${cascade.entity}.${fallback} does not exist`);
+    if (!columnExists(schema.tables, targetEntity, fallback)) {
+      add(diagnostics, `${path}.via`, `is omitted, but ${targetEntity}.${fallback} does not exist`);
     }
     return;
   }
-  if (cascade.via.includes("_") && cascade.via !== `${sourceEntity}_id`) {
-    if (!tableExists(schema.tables, cascade.via)) {
-      add(diagnostics, `${path}.via`, `looks like a junction table but ${JSON.stringify(cascade.via)} does not exist`);
+
+  if (isTableRef(cascade.via)) {
+    const junction = cascade.via.table;
+    if (!tableExists(schema.tables, junction)) {
+      add(diagnostics, `${path}.via`, `references unknown junction entity ${JSON.stringify(junction)}`);
       return;
     }
-    for (const field of [`${sourceEntity}_id`, `${cascade.entity}_id`]) {
-      if (!columnExists(schema.tables, cascade.via, field)) {
-        add(diagnostics, `${path}.via`, `junction table ${cascade.via} must include ${field}`);
+    for (const field of [`${sourceEntity}_id`, `${targetEntity}_id`]) {
+      if (!columnExists(schema.tables, junction, field)) {
+        add(diagnostics, `${path}.via`, `junction table ${junction} must include ${field}`);
       }
     }
     return;
   }
-  if (!columnExists(schema.tables, cascade.entity, cascade.via)) {
-    add(diagnostics, `${path}.via`, `direct cascade field ${cascade.entity}.${cascade.via} does not exist`);
+
+  validateFieldRef(schema, cascade.via, `${path}.via`, diagnostics, targetEntity);
+}
+
+function isTableRef(ref: TableRef | FieldRef): ref is TableRef {
+  return Boolean((ref as TableRef).table && !(ref as FieldRef).field);
+}
+
+function tableRefName(ref: TableRef | string | null | undefined): string | null {
+  if (!ref) return null;
+  if (typeof ref === "string") return ref;
+  return ref.table || null;
+}
+
+function validateEffect(schema: Schema, effect: Effect, path: string, diagnostics: SchemaDiagnostic[]): void {
+  const sources = [Boolean(effect.emit), Boolean(effect.notify), Boolean(effect.call)].filter(Boolean).length;
+  if (sources !== 1) add(diagnostics, path, "must declare exactly one effect source: emit, notify, or call");
+
+  if (typeof (effect as any).emit === "string") {
+    add(diagnostics, `${path}.emit`, "must reference effectRefs.events, not a raw string");
+  } else if (effect.emit && !schema.effectContracts?.events?.[effect.emit.event]) {
+    add(diagnostics, `${path}.emit`, `references undeclared event ${JSON.stringify(effect.emit.event)}`);
+  }
+
+  const notify = effect.notify;
+  if (notify) {
+    if (!schema.effectContracts?.notifications?.templates?.[notify.template.template]) {
+      add(diagnostics, `${path}.notify.template`, `references undeclared notification template ${JSON.stringify(notify.template.template)}`);
+    }
+    if (!schema.effectContracts?.notifications?.recipients?.[notify.to.recipient]) {
+      add(diagnostics, `${path}.notify.to`, `references undeclared notification recipient ${JSON.stringify(notify.to.recipient)}`);
+    }
+  }
+
+  const call = effect.call;
+  if (call && !schema.effectContracts?.calls?.[call.service]?.[call.action]) {
+    add(diagnostics, `${path}.call`, `references undeclared service action ${JSON.stringify(`${call.service}.${call.action}`)}`);
   }
 }
 
@@ -692,68 +783,12 @@ function validateGuard(schema: Schema, entity: string, expr: Expr | null, path: 
   }
 }
 
-function validateEcommerce(schema: Schema, diagnostics: SchemaDiagnostic[]): void {
-  const ecommerce = schema.ecommerce;
-  if (!ecommerce?.enabled) return;
-
-  requireEntity(schema, ecommerce.catalog.entity, "ecommerce.catalog.entity", diagnostics);
-  validateFieldRef(schema, ecommerce.catalog.label, "ecommerce.catalog.label", diagnostics, ecommerce.catalog.entity);
-  validateOptionalFieldRef(schema, ecommerce.catalog.description, "ecommerce.catalog.description", diagnostics, ecommerce.catalog.entity);
-  validateFieldRef(schema, ecommerce.catalog.price, "ecommerce.catalog.price", diagnostics, ecommerce.catalog.entity);
-  ecommerce.catalog.groupBy.forEach((ref, index) => validateFieldRef(schema, ref, `ecommerce.catalog.groupBy.${index}`, diagnostics, ecommerce.catalog.entity));
-  ecommerce.catalog.variantFields.forEach((ref, index) => validateFieldRef(schema, ref, `ecommerce.catalog.variantFields.${index}`, diagnostics, ecommerce.catalog.entity));
-  validateOptionalFieldRef(schema, ecommerce.catalog.availability.field, "ecommerce.catalog.availability.field", diagnostics, ecommerce.catalog.entity);
-
-  requireEntity(schema, ecommerce.order.entity, "ecommerce.order.entity", diagnostics);
-  validateFieldRef(schema, ecommerce.order.user, "ecommerce.order.user", diagnostics, ecommerce.order.entity);
-  validateFieldRef(schema, ecommerce.order.status, "ecommerce.order.status", diagnostics, ecommerce.order.entity);
-  validateFieldRef(schema, ecommerce.order.amount, "ecommerce.order.amount", diagnostics, ecommerce.order.entity);
-  validateFieldRef(schema, ecommerce.order.currency, "ecommerce.order.currency", diagnostics, ecommerce.order.entity);
-  validateFieldRef(schema, ecommerce.order.expiresAt, "ecommerce.order.expiresAt", diagnostics, ecommerce.order.entity);
-  validateFieldRef(schema, ecommerce.order.paymentReference, "ecommerce.order.paymentReference", diagnostics, ecommerce.order.entity);
-  validateOptionalFieldRef(schema, ecommerce.order.client, "ecommerce.order.client", diagnostics, ecommerce.order.entity);
-
-  requireEntity(schema, ecommerce.lineItem.entity, "ecommerce.lineItem.entity", diagnostics);
-  validateFieldRef(schema, ecommerce.lineItem.catalogItem, "ecommerce.lineItem.catalogItem", diagnostics, ecommerce.lineItem.entity);
-  validateFieldRef(schema, ecommerce.lineItem.user, "ecommerce.lineItem.user", diagnostics, ecommerce.lineItem.entity);
-  validateFieldRef(schema, ecommerce.lineItem.price, "ecommerce.lineItem.price", diagnostics, ecommerce.lineItem.entity);
-  validateFieldRef(schema, ecommerce.lineItem.status, "ecommerce.lineItem.status", diagnostics, ecommerce.lineItem.entity);
-  validateOptionalFieldRef(schema, ecommerce.lineItem.quantity, "ecommerce.lineItem.quantity", diagnostics, ecommerce.lineItem.entity);
-  for (const [name, option] of Object.entries(ecommerce.lineItem.options || {})) {
-    validateOptionalFieldRef(schema, option.field, `ecommerce.lineItem.options.${name}.field`, diagnostics, ecommerce.lineItem.entity);
-    if (option.min !== null && option.max !== null && option.min > option.max) {
-      add(diagnostics, `ecommerce.lineItem.options.${name}`, "min must be less than or equal to max");
-    }
-    if (option.default !== null && option.choices.length > 0 && !option.choices.includes(option.default)) {
-      add(diagnostics, `ecommerce.lineItem.options.${name}.default`, "must be one of choices when choices are configured");
-    }
-  }
-
-  requireEntity(schema, ecommerce.orderLine.entity, "ecommerce.orderLine.entity", diagnostics);
-  validateFieldRef(schema, ecommerce.orderLine.order, "ecommerce.orderLine.order", diagnostics, ecommerce.orderLine.entity);
-  validateFieldRef(schema, ecommerce.orderLine.lineItem, "ecommerce.orderLine.lineItem", diagnostics, ecommerce.orderLine.entity);
-
-  requireEntity(schema, ecommerce.transaction.entity, "ecommerce.transaction.entity", diagnostics);
-  validateFieldRef(schema, ecommerce.transaction.user, "ecommerce.transaction.user", diagnostics, ecommerce.transaction.entity);
-  validateFieldRef(schema, ecommerce.transaction.amount, "ecommerce.transaction.amount", diagnostics, ecommerce.transaction.entity);
-  validateOptionalFieldRef(schema, ecommerce.transaction.type, "ecommerce.transaction.type", diagnostics, ecommerce.transaction.entity);
-  validateFieldRef(schema, ecommerce.transaction.status, "ecommerce.transaction.status", diagnostics, ecommerce.transaction.entity);
-  validateFieldRef(schema, ecommerce.transaction.reference, "ecommerce.transaction.reference", diagnostics, ecommerce.transaction.entity);
-  validateOptionalFieldRef(schema, ecommerce.transaction.client, "ecommerce.transaction.client", diagnostics, ecommerce.transaction.entity);
-
-  requireEntity(schema, ecommerce.transactionLine.entity, "ecommerce.transactionLine.entity", diagnostics);
-  validateFieldRef(schema, ecommerce.transactionLine.transaction, "ecommerce.transactionLine.transaction", diagnostics, ecommerce.transactionLine.entity);
-  validateFieldRef(schema, ecommerce.transactionLine.lineItem, "ecommerce.transactionLine.lineItem", diagnostics, ecommerce.transactionLine.entity);
-
-  if (ecommerce.checkout.expiryMinutes < 1) add(diagnostics, "ecommerce.checkout.expiryMinutes", "must be at least 1");
-  if (ecommerce.checkout.maxQuantity < 1) add(diagnostics, "ecommerce.checkout.maxQuantity", "must be at least 1");
-  if (ecommerce.checkout.maxLines < 1) add(diagnostics, "ecommerce.checkout.maxLines", "must be at least 1");
-}
-
-function requireEntity(schema: Schema, entity: string, path: string, diagnostics: SchemaDiagnostic[]): void {
-  if (!entity) {
-    add(diagnostics, path, "is required");
-  } else if (!tableExists(schema.tables, entity)) {
-    add(diagnostics, path, `references unknown entity ${JSON.stringify(entity)}`);
-  }
+function validateCommerce(schema: Schema, diagnostics: SchemaDiagnostic[]): void {
+  const commerce = schema.commerce;
+  if (!commerce?.enabled) return;
+  if (commerce.checkout.expiryMinutes < 1) add(diagnostics, "commerce.checkout.expiryMinutes", "must be at least 1");
+  if (commerce.checkout.maxQuantity < 1) add(diagnostics, "commerce.checkout.maxQuantity", "must be at least 1");
+  if (commerce.checkout.maxLines < 1) add(diagnostics, "commerce.checkout.maxLines", "must be at least 1");
+  const inference = inferCommerce(schema);
+  diagnostics.push(...inference.diagnostics);
 }

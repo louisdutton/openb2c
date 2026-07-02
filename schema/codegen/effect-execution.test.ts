@@ -29,6 +29,10 @@ function operation(overrides: Partial<Operation> = {}): Operation {
     relationships: [],
     public: false,
     scope: null,
+    policy: {},
+    presentation: {},
+    audit: {},
+    transitions: [],
     set: {},
     cascade: [],
     effects: [],
@@ -38,6 +42,14 @@ function operation(overrides: Partial<Operation> = {}): Operation {
 
 const schema: Schema = {
   organization: DEFAULT_ORGANIZATION_METADATA,
+  effectContracts: {
+    events: { "ticket.confirmed": {} },
+    notifications: {
+      templates: { ticket_confirmation: { channel: "email" } },
+      recipients: { customer: {} },
+    },
+    calls: { payment: { create_intent: {} } },
+  },
   tables: {
     ticket: {
       id: { ...baseColumn, type: "integer", pk: true, auto: true },
@@ -47,10 +59,10 @@ const schema: Schema = {
   operations: {
     ticket: {
       confirm: operation({
-        set: { status: "confirmed" },
+        set: { status: { value: "confirmed" } },
         effects: [
-          { emit: "ticket.confirmed", notify: null, call: null },
-          { emit: null, notify: { channel: "email", template: "ticket_confirmation", to: "customer" }, call: null },
+          { emit: { event: "ticket.confirmed" }, notify: null, call: null },
+          { emit: null, notify: { template: { template: "ticket_confirmation", channel: "email" }, to: { recipient: "customer" } }, call: null },
           { emit: null, notify: null, call: { service: "payment", action: "create_intent" } },
         ],
       }),

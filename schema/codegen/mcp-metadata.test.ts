@@ -23,7 +23,7 @@ function op(overrides: Partial<Operation> = {}): Operation {
     public: false,
     scope: null,
     policy: {},
-    workflow: {},
+    presentation: {}, transitions: [],
     audit: {},
     set: {},
     cascade: [],
@@ -66,29 +66,31 @@ function metadataSchema(): Schema {
       ticket: {
         read: op({
           public: true,
-          policy: {
+          presentation: {
             label: "Browse tickets",
             description: "Public ticket browsing.",
+          },
+          policy: {
             audiences: ["anonymous", "customer"],
             risk: "low",
           },
         }),
         cancel: op({
-          policy: {
+          presentation: {
             label: "Cancel ticket",
             description: "Cancel a reserved ticket.",
-            audiences: ["customer"],
-            risk: "medium",
-          },
-          workflow: {
-            audit: { summary: "Cancelled ticket" },
             confirmation: {
               required: true,
               confirmLabel: "Cancel ticket",
               severity: "warning",
             },
           },
-          set: { status: "cancelled" },
+          policy: {
+            audiences: ["customer"],
+            risk: "medium",
+          },
+          audit: { summary: "Cancelled ticket" },
+          set: { status: { value: "cancelled" } },
         }),
       },
     },

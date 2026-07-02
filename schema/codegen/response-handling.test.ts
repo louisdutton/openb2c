@@ -27,7 +27,7 @@ function col(overrides: Partial<Column>): Column {
 }
 
 function op(overrides: Partial<Operation> = {}): Operation {
-  return { guard: null, relationships: [], public: false, scope: null, policy: {}, workflow: {}, audit: {}, set: {}, cascade: [], effects: [], ...overrides };
+  return { guard: null, relationships: [], public: false, scope: null, policy: {}, presentation: {}, transitions: [], audit: {}, set: {}, cascade: [], effects: [], ...overrides };
 }
 
 function schema(): Schema {
@@ -43,7 +43,7 @@ function schema(): Schema {
       ticket: {
         confirm: op({
           guard: { _t: "bin", op: "==", left: { _t: "field", name: "status" }, right: { _t: "lit", value: "reserved" } },
-          set: { status: "confirmed" },
+          set: { status: { value: "confirmed" } },
         }),
       },
     },

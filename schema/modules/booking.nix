@@ -3,6 +3,7 @@ let
   E = import ../lib/expr.nix;
   F = config.refs.booking;
   V = config.values.booking;
+  ER = config.effectRefs;
   ticket = config.refs.ticket;
   ticketStatus = config.values.ticket.status;
 in
@@ -67,21 +68,22 @@ in
     ];
   };
 
+  effectContracts.notifications = {
+    templates.booking_cancelled = {};
+    recipients.customer = {};
+  };
+
   operations.booking = {
     cancel = {
       guard = E.eq (E.f F.status) (E.lit V.status.checkout_pending);
-      set = [
-        { field = F.status; value = V.status.cancelled; }
-      ];
+      set.status.value = V.status.cancelled;
       cascade = [{
-        entity = "ticket";
-        via = "booking_ticket";
-        set = [
-          { field = ticket.status; value = ticketStatus.cancelled; }
-        ];
+        entity = config.entityRefs.ticket;
+        via = config.entityRefs.booking_ticket;
+        set.status.value = ticketStatus.cancelled;
       }];
       effects = [
-        { notify = { channel = "email"; template = "booking_cancelled"; }; }
+        { notify = { template = ER.notifications.templates.booking_cancelled; to = ER.notifications.recipients.customer; }; }
       ];
     };
   };

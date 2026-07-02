@@ -75,7 +75,7 @@ describe("Duchy Opera production backend", () => {
     });
     expect(schema.derived?.performance?.display_title).toBeUndefined();
 
-    expect(schema.workflows?.groups).toMatchObject({
+    expect(schema.presentation?.groups).toMatchObject({
       productionLifecycle: { label: "Production lifecycle" },
       rehearsalLifecycle: { label: "Rehearsal lifecycle" },
       rehearsalAttendance: { label: "Rehearsal attendance" },
@@ -83,10 +83,12 @@ describe("Duchy Opera production backend", () => {
     });
 
     expect(schema.operations.production.activate).toBeDefined();
-    expect(schema.operations.rehearsal.publish.effects).toContainEqual({ emit: "rehearsal.publish" });
     expect(schema.operations.rehearsal.publish.effects).toContainEqual({
       emit: null,
-      notify: { channel: "email", template: "rehearsal_published", to: "participants" },
+      notify: {
+        template: { template: "rehearsal_published", channel: "email" },
+        to: { recipient: "participants" },
+      },
       call: null,
     });
     expect(schema.operations.production_material.publish).toBeDefined();

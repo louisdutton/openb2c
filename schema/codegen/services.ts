@@ -1,4 +1,4 @@
-import type { Column, DerivedField, EcommerceConfig, FieldRef, NormalizedConstraint, Operation, Schema, Tables } from "./types";
+import type { Column, DerivedField, FieldAssignment, FieldRef, InferredCommerceConfig, NormalizedConstraint, Operation, Schema, Tables } from "./types";
 import { pascalCase, camelCase, getEcommerceConfig, hasCommerceWorkflow, hasCommerceBookingAliases } from "./utils";
 import { compileExpr, extractRelations } from "./expr";
 import { fieldConstraintRules, inferredConstraintMessage, normalizeConstraints } from "./constraints";
@@ -31,7 +31,7 @@ function ecommerceRuntimeConfig(schema: Schema): Record<string, unknown> {
   return normalizeEcommerceConfig(ecommerce);
 }
 
-function normalizeEcommerceConfig(ecommerce: EcommerceConfig): Record<string, unknown> {
+function normalizeEcommerceConfig(ecommerce: InferredCommerceConfig): Record<string, unknown> {
   const catalogEntity = requireEcommerceEntity("catalog.entity", ecommerce.catalog.entity);
   const orderEntity = requireEcommerceEntity("order.entity", ecommerce.order.entity);
   const lineItemEntity = requireEcommerceEntity("lineItem.entity", ecommerce.lineItem.entity);
@@ -114,7 +114,7 @@ function normalizeEcommerceConfig(ecommerce: EcommerceConfig): Record<string, un
 }
 
 function defaultOperation(): Operation {
-  return { guard: null, relationships: [], public: false, scope: null, policy: {}, workflow: {}, audit: {}, set: {}, cascade: [], effects: [] };
+  return { guard: null, relationships: [], public: false, scope: null, policy: {}, presentation: {}, audit: {}, transitions: [], set: {}, cascade: [], effects: [] };
 }
 
 function concurrencyFields(schema: Schema): Record<string, string> {
@@ -1408,7 +1408,7 @@ export function delete${Entity}(db: Database, id: number, auth: T.AuthContext = 
 function genOperationService(entity: string, opName: string, op: Operation, tables: Tables): string {
   const Entity = pascalCase(entity);
   const OpName = camelCase(opName);
-  const tableName = entity === "transaction" ? "[transaction]" : entity;
+  const tableName = sqlIdent(entity);
 
   const relations = extractRelations(op.guard);
   const guardCode = op.guard ? compileExpr(op.guard, entity) : "true";
@@ -1423,47 +1423,52 @@ function genOperationService(entity: string, opName: string, op: Operation, tabl
   }).join("\n");
 
   // Generate set clause
-  const setEntries = Object.entries(op.set);
-  const setFragments = setEntries.map(([k]) => `${k} = ?`);
+  const setEntries = Object.entries(op.set || {});
+  const setFragments = setEntries.map(([k, assignment]) => assignmentSetFragment(k, assignment));
+  const setValues = setEntries.flatMap(([k, assignment]) => assignmentRuntimeValues(entity, k, assignment));
   if (setEntries.length > 0 && hasUpdatedAt && !setEntries.some(([k]) => k === "updated_at")) {
-    setFragments.push("updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')");
+    setFragments.push("[updated_at] = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')");
   }
   const setCode = setFragments.length > 0
-    ? `db.query("UPDATE ${tableName} SET ${setFragments.join(", ")} WHERE id = ?").run(${setEntries.map(([_, v]) => JSON.stringify(v)).join(", ")}${setEntries.length > 0 ? ", " : ""}id);`
+    ? `db.query("UPDATE ${tableName} SET ${setFragments.join(", ")} WHERE id = ?").run(${[...setValues, "id"].join(", ")});`
     : "// No fields to set";
 
   // Generate cascade updates
   const cascadeCode = op.cascade.map(c => {
-    // Use single quotes for SQL string literals
-    const setClause = Object.entries(c.set).map(([k, v]) => `${k} = '${v}'`).join(", ");
+    const targetEntity = c.entity.table;
+    const cascadeEntries = Object.entries(c.set || {});
+    const setClause = cascadeEntries.map(([k, assignment]) => assignmentSetFragment(k, assignment)).join(", ");
+    const setValues = cascadeEntries.flatMap(([k, assignment]) => assignmentRuntimeValues(targetEntity, k, assignment));
+    if (!setClause) return "";
     if (c.via) {
-      // Check if via is a junction table (contains underscore and exists as table)
-      // or a direct FK column name
-      if (c.via.includes("_") && c.via !== `${entity}_id`) {
-        // Junction table: via = "transaction_ticket"
-        return `  db.query(\`UPDATE ${c.entity} SET ${setClause} WHERE id IN (SELECT ${c.entity}_id FROM ${c.via} WHERE ${entity}_id = ?)\`).run(id);`;
-      } else {
-        // Direct FK column: via = "performance_id"
-        return `  db.query("UPDATE ${c.entity} SET ${setClause} WHERE ${c.via} = ?").run(id);`;
+      if (!("field" in c.via)) {
+        return `  db.query("UPDATE ${sqlIdent(targetEntity)} SET ${setClause} WHERE [id] IN (SELECT [${targetEntity}_id] FROM ${sqlIdent(c.via.table)} WHERE [${entity}_id] = ?)").run(${[...setValues, "id"].join(", ")});`;
       }
+      return `  db.query("UPDATE ${sqlIdent(targetEntity)} SET ${setClause} WHERE ${sqlIdent(c.via.field)} = ?").run(${[...setValues, "id"].join(", ")});`;
     } else {
-      // Default: FK on target entity named {entity}_id
-      return `  db.query("UPDATE ${c.entity} SET ${setClause} WHERE ${entity}_id = ?").run(id);`;
+      return `  db.query("UPDATE ${sqlIdent(targetEntity)} SET ${setClause} WHERE [${entity}_id] = ?").run(${[...setValues, "id"].join(", ")});`;
     }
-  }).join("\n");
+  }).filter(Boolean).join("\n");
 
   // Generate effects
   const effectsCode = op.effects.map(e => {
-    if (e.emit) return `    { type: "emit", payload: { event: ${JSON.stringify(e.emit)}, ${entity} } }`;
-    if (e.notify) return `    { type: "notify", payload: ${JSON.stringify(e.notify)} }`;
+    if (e.emit) return `    { type: "emit", payload: { event: ${JSON.stringify(e.emit.event)}, ${entity} } }`;
+    if (e.notify) return `    { type: "notify", payload: ${JSON.stringify({
+      channel: e.notify.template.channel,
+      template: e.notify.template.template,
+      to: e.notify.to.recipient,
+    })} }`;
     if (e.call) return `    { type: "call", payload: ${JSON.stringify(e.call)} }`;
     return "";
   }).filter(Boolean).join(",\n");
 
-  const resultStatus = setEntries.find(([k]) => k === "status") ? JSON.stringify(setEntries.find(([k]) => k === "status")![1]) : '"updated"';
+  const statusAssignment = op.set?.status;
+  const resultStatus = statusAssignment?.value !== null && statusAssignment?.value !== undefined
+    ? JSON.stringify(statusAssignment.value)
+    : '"updated"';
 
   return `
-export function ${OpName}${Entity}(db: Database, id: number, auth: T.AuthContext = T.ANONYMOUS_AUTH_CONTEXT, ifMatch?: string | null, auditContext: AuditContext = {}): OpResult<{ id: number; status: string }> {
+export function ${OpName}${Entity}(db: Database, id: number, auth: T.AuthContext = T.ANONYMOUS_AUTH_CONTEXT, ifMatch?: string | null, auditContext: AuditContext = {}, input: Record<string, unknown> = {}): OpResult<{ id: number; status: string }> {
   const ${entity} = db.query("SELECT * FROM ${tableName} WHERE id = ?").get(id) as T.${Entity} | null;
   if (!${entity}) return { ok: false, error: "not found", code: "not_found" };
   if (!matchesIfMatch("${entity}", ${entity} as Record<string, unknown>, ifMatch)) {
@@ -1497,6 +1502,19 @@ ${effectsCode}
   };
 }
 `;
+}
+
+function assignmentSetFragment(field: string, assignment: FieldAssignment): string {
+  if (assignment.now) return `${sqlIdent(field)} = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`;
+  return `${sqlIdent(field)} = ?`;
+}
+
+function assignmentRuntimeValues(entity: string, field: string, assignment: FieldAssignment): string[] {
+  if (assignment.now) return [];
+  if (assignment.clear) return ["null"];
+  if (assignment.input) return [`input[${JSON.stringify(field)}]`];
+  if (assignment.expression) return [compileExpr(assignment.expression, entity)];
+  return [JSON.stringify(assignment.value)];
 }
 
 function genConfiguredCommerceServices(schema: Schema): string {

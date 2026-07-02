@@ -4,6 +4,7 @@ let
   E = import ../lib/expr.nix;
   F = config.refs.user;
   V = config.values.user;
+  ER = config.effectRefs;
 in
 {
   tables.user = {
@@ -19,15 +20,18 @@ in
     };
   };
 
+  effectContracts.notifications = {
+    templates.account_suspended = {};
+    recipients.customer = {};
+  };
+
   operations.user = {
     suspend = {
       relationships = [];
       guard = E.eq (E.f F.status) (E.lit V.status.active);
-      set = [
-        { field = F.status; value = V.status.suspended; }
-      ];
+      set.status.value = V.status.suspended;
       effects = [
-        { notify = { channel = "email"; template = "account_suspended"; }; }
+        { notify = { template = ER.notifications.templates.account_suspended; to = ER.notifications.recipients.customer; }; }
       ];
     };
 
@@ -36,9 +40,7 @@ in
       guard = E.or
         (E.eq (E.f F.status) (E.lit V.status.suspended))
         (E.eq (E.f F.status) (E.lit V.status.inactive));
-      set = [
-        { field = F.status; value = V.status.active; }
-      ];
+      set.status.value = V.status.active;
     };
 
     promote_to_admin = {
@@ -46,9 +48,7 @@ in
       guard = E.and
         (E.eq (E.f F.role) (E.lit V.role.member))
         (E.eq (E.f F.status) (E.lit V.status.active));
-      set = [
-        { field = F.role; value = V.role.admin; }
-      ];
+      set.role.value = V.role.admin;
     };
   };
 }

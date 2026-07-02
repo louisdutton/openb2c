@@ -1,6 +1,6 @@
 import type { Column, Operation, Schema } from "./types";
 import { fieldConstraintRules, type FieldConstraintRule } from "./constraints";
-import { getAppMetadata, hasCommerceWorkflow, hasCommerceBookingAliases, pascalCase, camelCase } from "./utils";
+import { getAppMetadata, getEcommerceConfig, hasCommerceWorkflow, hasCommerceBookingAliases, pascalCase, camelCase } from "./utils";
 
 const CRUD_ACTIONS = new Set(["read", "create", "update", "delete"]);
 
@@ -138,10 +138,10 @@ function toolDescription(
   fallback: string,
   cols?: Record<string, Column>,
 ): string {
-  const label = op?.policy?.label;
-  const description = op?.policy?.description;
-  const workflowSummary = op?.workflow?.audit?.summary;
-  const confirmation = op?.workflow?.confirmation;
+  const label = op?.presentation?.label;
+  const description = op?.presentation?.description;
+  const workflowSummary = op?.audit?.summary;
+  const confirmation = op?.presentation?.confirmation;
   const parts: string[] = [];
 
   if (label && description) {
@@ -186,14 +186,14 @@ function operationMutates(op: Operation | undefined): boolean {
 function isDestructiveOperation(action: string, op: Operation | undefined): boolean {
   if (action === "delete") return true;
   return Boolean(
-    op?.workflow?.confirmation?.required ||
+    op?.presentation?.confirmation?.required ||
     op?.policy?.risk === "high" ||
     (op?.cascade || []).length > 0
   );
 }
 
 function operationToolTitle(action: string, entity: string, op: Operation | undefined): string {
-  return op?.policy?.label || `${titleCase(action)} ${titleCase(entity)}`;
+  return op?.presentation?.label || `${titleCase(action)} ${titleCase(entity)}`;
 }
 
 function toolAnnotations(
@@ -219,7 +219,7 @@ function confirmationMetadata(
   entity: string,
   op: Operation | undefined,
 ): Record<string, unknown> | null {
-  const configured = op?.workflow?.confirmation;
+  const configured = op?.presentation?.confirmation;
   const destructive = isDestructiveOperation(action, op);
   if (!configured && !destructive) return null;
 
@@ -421,6 +421,8 @@ ${operationExtras}      inputSchema: {
   }
 
   if (hasCommerceWorkflow(schema)) {
+    const commerce = getEcommerceConfig(schema);
+    const commerceOrderEntity = commerce?.order.entity || "commerce_order";
     tools.push(`    {
       name: "list_commerce_catalog",
       description: "List configured ecommerce catalog items",
@@ -468,7 +470,7 @@ ${operationExtras}      inputSchema: {
         required: ["items"],
       },
     }`);
-    toolAuthz.push(`  "checkout_cart": { entity: "${schema.ecommerce?.order.entity}", action: "create" }`);
+    toolAuthz.push(`  "checkout_cart": { entity: "${commerceOrderEntity}", action: "create" }`);
     handlers.push(`      case "checkout_cart":
         const checkoutCartResult = S.checkoutCommerceCart(db, args as S.CommerceCheckoutInput, auth);
         if (!checkoutCartResult.ok) return { content: [{ type: "text", text: checkoutCartResult.error }], isError: true };
@@ -496,7 +498,7 @@ ${operationExtras}      inputSchema: {
         required: ["order_id"],
       },
     }`);
-    toolAuthz.push(`  "create_order_payment_intent": { entity: "${schema.ecommerce?.order.entity}", action: "update" }`);
+    toolAuthz.push(`  "create_order_payment_intent": { entity: "${commerceOrderEntity}", action: "update" }`);
     handlers.push(`      case "create_order_payment_intent":
         const orderPaymentIntentResult = await S.createCommercePaymentIntent(db, args.order_id as number, auth);
         if (!orderPaymentIntentResult.ok) return { content: [{ type: "text", text: orderPaymentIntentResult.error }], isError: true };
@@ -558,7 +560,7 @@ ${operationExtras}      inputSchema: {
         required: ["performance_id"],
       },
     }`);
-    toolAuthz.push(`  "reserve_booking": { entity: "${schema.ecommerce?.order.entity}", action: "create" }`);
+    toolAuthz.push(`  "reserve_booking": { entity: "${commerceOrderEntity}", action: "create" }`);
     handlers.push(`      case "reserve_booking":
         const reserveBookingResult = S.reserveBooking(db, args as S.ReserveBookingInput, auth);
         if (!reserveBookingResult.ok) return { content: [{ type: "text", text: reserveBookingResult.error }], isError: true };
@@ -586,7 +588,7 @@ ${operationExtras}      inputSchema: {
         required: ["booking_id"],
       },
     }`);
-    toolAuthz.push(`  "create_booking_payment_intent": { entity: "${schema.ecommerce?.order.entity}", action: "update" }`);
+    toolAuthz.push(`  "create_booking_payment_intent": { entity: "${commerceOrderEntity}", action: "update" }`);
     handlers.push(`      case "create_booking_payment_intent":
         const paymentIntentResult = await S.createPaymentIntentForBooking(db, args.booking_id as number, auth);
         if (!paymentIntentResult.ok) return { content: [{ type: "text", text: paymentIntentResult.error }], isError: true };

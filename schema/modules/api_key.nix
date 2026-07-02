@@ -99,9 +99,7 @@ in {
   operations.api_key = {
     revoke = {
       guard = E.eq (E.f F.active) (E.lit 1);
-      set = [
-        { field = F.active; value = "0"; }
-      ];
+      set.active.value = 0;
     };
   };
 

@@ -221,7 +221,7 @@ describe("generated MCP example integrations", () => {
         expect(db.query<{ status: string }, []>("SELECT status FROM issue WHERE id = 1").get()).toEqual({ status: "in_progress" });
         expect(db.query<{ effect_type: string }, []>(
           "SELECT effect_type FROM openb2c_effect_attempt ORDER BY id",
-        ).all()).toEqual([{ effect_type: "emit" }, { effect_type: "notify" }]);
+        ).all()).toEqual([{ effect_type: "notify" }]);
       } finally {
         db.close();
       }

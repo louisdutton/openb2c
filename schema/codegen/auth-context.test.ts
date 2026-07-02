@@ -22,7 +22,7 @@ const schema: Schema = {
         relationships: [],
         public: false,
         scope: null,
-        set: { status: "published" },
+        set: { status: { value: "published" } },
         cascade: [],
         effects: [],
       },
@@ -63,7 +63,7 @@ describe("auth context generation", () => {
     expect(services).toContain("findNoteById(db: Database, id: number, auth: T.AuthContext = T.ANONYMOUS_AUTH_CONTEXT)");
     expect(services).toContain("findAllNotes(db: Database, opts: ListOptions = {}, auth: T.AuthContext = T.ANONYMOUS_AUTH_CONTEXT)");
     expect(services).toContain("createNote(db: Database, input: T.NoteInput, auth: T.AuthContext = T.ANONYMOUS_AUTH_CONTEXT, auditContext: AuditContext = {})");
-    expect(services).toContain("publishNote(db: Database, id: number, auth: T.AuthContext = T.ANONYMOUS_AUTH_CONTEXT, ifMatch?: string | null, auditContext: AuditContext = {})");
+    expect(services).toContain("publishNote(db: Database, id: number, auth: T.AuthContext = T.ANONYMOUS_AUTH_CONTEXT, ifMatch?: string | null, auditContext: AuditContext = {}, input: Record<string, unknown> = {})");
     expect(services).not.toContain("principals");
     expect(services).not.toContain("roles");
     expect(services).not.toContain("claims");

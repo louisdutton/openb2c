@@ -80,14 +80,9 @@ const schema: Schema = {
       delete: operation({ relationships: [ownerRel] }),
       confirm: operation({
         relationships: [ownerRel],
-        policy: {
+        presentation: {
           label: "Confirm ticket",
           description: "Confirm a reserved ticket.",
-          audiences: ["customer"],
-          risk: "medium",
-        },
-        workflow: {
-          audit: { summary: "Confirmed ticket" },
           confirmation: {
             required: true,
             title: "Confirm ticket",
@@ -96,7 +91,12 @@ const schema: Schema = {
             severity: "warning",
           },
         },
-        set: { status: "confirmed" },
+        policy: {
+          audiences: ["customer"],
+          risk: "medium",
+        },
+        audit: { summary: "Confirmed ticket" },
+        set: { status: { value: "confirmed" } },
       }),
     },
   },

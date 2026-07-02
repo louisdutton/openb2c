@@ -3,6 +3,7 @@ let
   E = import ../lib/expr.nix;
   F = config.refs.performance;
   V = config.values.performance;
+  ER = config.effectRefs;
   ticket = config.refs.ticket;
   ticketStatus = config.values.ticket.status;
 in
@@ -123,18 +124,26 @@ in
     ];
   };
 
-  workflows.groups.performanceLifecycle = {
+  presentation.groups.performanceLifecycle = {
     label = "Performance lifecycle";
     description = "Administrative operations for scheduled performances.";
     displayPriority = 10;
   };
 
+  effectContracts.notifications = {
+    templates.performance_cancelled = {};
+    templates.performance_rescheduled = {};
+    recipients.ticket_holders = {};
+  };
+
   operations.performance = {
     read = {
       public = true;
-      policy = {
+      presentation = {
         label = "Browse performances";
         description = "Public catalog access to scheduled performances.";
+      };
+      policy = {
         audiences = [ "anonymous" "customer" ];
         risk = "low";
       };
@@ -145,22 +154,13 @@ in
         required = true;
         category = "workflow";
         reason = "Performance cancellation cascades to ticket state and customer notifications.";
+        summary = "Cancelled performance";
+        detail = "Cancelled the performance and cascaded cancellation to related tickets.";
       };
-      policy = {
+      presentation = {
         label = "Cancel performance";
         description = "Administrative operation that cancels a scheduled performance and cascades ticket cancellation.";
-        audiences = [ "staff" ];
-        risk = "high";
-      };
-      workflow = {
         group = "performanceLifecycle";
-        transitions = [{
-          field = F.status;
-          from = [ V.status.scheduled ];
-          to = V.status.cancelled;
-        }];
-        audit.summary = "Cancelled performance";
-        audit.detail = "Cancelled the performance and cascaded cancellation to related tickets.";
         confirmation = {
           required = true;
           title = "Cancel performance";
@@ -169,40 +169,43 @@ in
           severity = "danger";
         };
       };
+      policy = {
+        audiences = [ "staff" ];
+        risk = "high";
+      };
+      transitions = [{
+        field = F.status;
+        from = [ V.status.scheduled ];
+        to = V.status.cancelled;
+      }];
       guard = E.eq (E.f F.status) (E.lit V.status.scheduled);
-      set = [
-        { field = F.status; value = V.status.cancelled; }
-      ];
+      set.status.value = V.status.cancelled;
       cascade = [{
-        entity = "ticket";
-        via = "performance_id";
-        set = [
-          { field = ticket.status; value = ticketStatus.cancelled; }
-        ];
+        entity = config.entityRefs.ticket;
+        via = config.refs.ticket.performance_id;
+        set.status.value = ticketStatus.cancelled;
       }];
       effects = [
-        { notify = { channel = "email"; template = "performance_cancelled"; to = "ticket_holders"; }; }
+        { notify = { template = ER.notifications.templates.performance_cancelled; to = ER.notifications.recipients.ticket_holders; }; }
       ];
     };
 
     complete = {
-      policy = {
+      presentation = {
         label = "Complete performance";
+        group = "performanceLifecycle";
+      };
+      policy = {
         audiences = [ "staff" ];
       };
-      workflow = {
-        group = "performanceLifecycle";
-        transitions = [{
-          field = F.status;
-          from = [ V.status.scheduled ];
-          to = V.status.completed;
-        }];
-        audit.summary = "Completed performance";
-      };
+      transitions = [{
+        field = F.status;
+        from = [ V.status.scheduled ];
+        to = V.status.completed;
+      }];
+      audit.summary = "Completed performance";
       guard = E.eq (E.f F.status) (E.lit V.status.scheduled);
-      set = [
-        { field = F.status; value = V.status.completed; }
-      ];
+      set.status.value = V.status.completed;
     };
 
     reschedule = {
@@ -210,15 +213,11 @@ in
         required = true;
         category = "workflow";
         reason = "Performance rescheduling may notify ticket holders.";
+        summary = "Rescheduled performance";
       };
-      policy = {
+      presentation = {
         label = "Reschedule performance";
-        audiences = [ "staff" ];
-        risk = "high";
-      };
-      workflow = {
         group = "performanceLifecycle";
-        audit.summary = "Rescheduled performance";
         confirmation = {
           required = true;
           title = "Reschedule performance";
@@ -227,11 +226,15 @@ in
           severity = "warning";
         };
       };
+      policy = {
+        audiences = [ "staff" ];
+        risk = "high";
+      };
       guard = E.eq (E.f F.status) (E.lit V.status.scheduled);
       # Note: actual start/end datetimes come from input, not hardcoded.
       set = {};  # Fields set from input
       effects = [
-        { notify = { channel = "email"; template = "performance_rescheduled"; to = "ticket_holders"; }; }
+        { notify = { template = ER.notifications.templates.performance_rescheduled; to = ER.notifications.recipients.ticket_holders; }; }
       ];
     };
   };

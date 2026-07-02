@@ -187,12 +187,11 @@ export class ObEntityDetail extends HTMLElement {
   private _operationViews(api: ObApi, record: Record<string, unknown>): OperationView[] {
     const groups = api.spec?.["x-openb2c-workflows"]?.groups || {};
     return api.getOperations(this.entity).map((op) => {
-      const policy = api.getOperationPolicy(this.entity, op) || {};
       const workflow = api.getOperationWorkflow(this.entity, op) || {};
       const group = workflow.group ? groups[workflow.group] : null;
-      const label = policy.label || displayOperation(op);
+      const label = workflow.label || displayOperation(op);
       const availability = operationAvailability(record, workflow, label);
-      const description = policy.description || workflow.audit?.summary || group?.description || group?.label || "";
+      const description = workflow.description || workflow.audit?.summary || group?.description || group?.label || "";
       return {
         op,
         label,

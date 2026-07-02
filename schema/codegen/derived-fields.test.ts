@@ -26,7 +26,7 @@ function col(overrides: Partial<Column>): Column {
 }
 
 function op(overrides: Partial<Operation> = {}): Operation {
-  return { guard: null, relationships: [], public: true, scope: null, policy: {}, workflow: {}, set: {}, cascade: [], effects: [], ...overrides };
+  return { guard: null, relationships: [], public: true, scope: null, policy: {}, presentation: {}, transitions: [], set: {}, cascade: [], effects: [], ...overrides };
 }
 
 function derivedSchema(): Schema {

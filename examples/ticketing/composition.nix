@@ -91,10 +91,12 @@ in {
   audit = modules.config.audit;
   seed = modules.config.seed;
   integrations = modules.config.integrations;
-  workflows = modules.config.workflows;
+  effectContracts = modules.config.effectContracts;
+  presentation = modules.config.presentation;
   tables = modules.config.tables;
   derived = modules.config.derived;
   refs = modules.config.refs;
+  entityRefs = modules.config.entityRefs;
   relationships = modules.config.relationships;
   constraints = modules.config.constraints;
   operations = composeLib.processOperations modules.config.tables modules.config.relationships modules.config.operations;

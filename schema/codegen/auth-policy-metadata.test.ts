@@ -45,7 +45,7 @@ function col(overrides: Partial<Column>): Column {
 }
 
 function op(overrides: Partial<Operation> = {}): Operation {
-  return { guard: null, relationships: [], public: false, scope: null, policy: {}, set: {}, cascade: [], effects: [], ...overrides };
+  return { guard: null, relationships: [], public: false, scope: null, policy: {}, presentation: {}, audit: {}, transitions: [], set: {}, cascade: [], effects: [], ...overrides };
 }
 
 function policySchema(): Schema {
@@ -93,16 +93,20 @@ function policySchema(): Schema {
       note: {
         read: op({
           public: true,
-          policy: {
+          presentation: {
             label: "Browse notes",
             description: "Public note browsing.",
+          },
+          policy: {
             audiences: ["anonymous", "customer"],
             risk: "low",
           },
         }),
         publish: op({
-          policy: {
+          presentation: {
             label: "Publish note",
+          },
+          policy: {
             audiences: ["staff"],
             risk: "high",
           },
@@ -118,7 +122,7 @@ describe("role and policy metadata generation", () => {
 
     expect(schema.auth?.roles.customer.audience).toBe("customer");
     expect(schema.auth?.roles.service.audience).toBe("service");
-    expect(schema.operations.performance.read.policy?.label).toBe("Browse performances");
+    expect(schema.operations.performance.read.presentation?.label).toBe("Browse performances");
     expect(schema.operations.ticket.confirm.policy?.audiences).toEqual(["customer", "service"]);
     expect(schema.operations.transaction.refund.policy?.risk).toBe("high");
   });
@@ -142,14 +146,16 @@ describe("role and policy metadata generation", () => {
       public: true,
       audiences: ["anonymous", "customer"],
       risk: "low",
-      label: "Browse notes",
     });
     expect(openapi.paths["/api/notes/{id}/publish"].post["x-openb2c-policy"]).toMatchObject({
       scope: "note.publish",
       public: false,
       audiences: ["staff"],
       risk: "high",
-      label: "Publish note",
+    });
+    expect(openapi.paths["/api/notes"].get["x-openb2c-workflow"]).toMatchObject({
+      label: "Browse notes",
+      description: "Public note browsing.",
     });
   });
 

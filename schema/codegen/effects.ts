@@ -21,8 +21,8 @@ export function genEffectsInterface(schema: Schema): string {
   for (const ops of Object.values(schema.operations)) {
     for (const op of Object.values(ops)) {
       for (const e of op.effects) {
-        if (e.emit) events.add(e.emit);
-        if (e.notify) notifyTemplates.add(e.notify.template);
+        if (e.emit) events.add(e.emit.event);
+        if (e.notify) notifyTemplates.add(e.notify.template.template);
         if (e.call) calls.add(`${e.call.service}.${e.call.action}`);
       }
     }

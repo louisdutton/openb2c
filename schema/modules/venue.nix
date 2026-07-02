@@ -20,16 +20,12 @@ in
 
     deactivate = {
       guard = E.eq (E.f F.active) (E.lit 1);
-      set = [
-        { field = F.active; value = "0"; }
-      ];
+      set.active.value = 0;
     };
 
     activate = {
       guard = E.eq (E.f F.active) (E.lit 0);
-      set = [
-        { field = F.active; value = "1"; }
-      ];
+      set.active.value = 1;
     };
   };
 }

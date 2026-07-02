@@ -5,6 +5,7 @@ let
   materialStatus = config.values.production_material.status;
   version = config.refs.material_version;
   versionStatus = config.values.material_version.status;
+  ER = config.effectRefs;
 in
 {
   tables.production_material = {
@@ -187,121 +188,116 @@ in
     reason = "Material versions preserve the authoritative production document history.";
   };
 
-  workflows.groups.materialsLifecycle = {
+  presentation.groups.materialsLifecycle = {
     label = "Materials lifecycle";
     description = "Publishing, superseding, and archiving production materials.";
     displayPriority = 70;
   };
 
+  effectContracts.notifications = {
+    templates.material_published = {};
+    recipients.participants = {};
+  };
+
   operations.production_material = {
     publish = {
       relationships = [];
-      policy = {
+      presentation = {
         label = "Publish material";
+        group = "materialsLifecycle";
+      };
+      policy = {
         audiences = [ "staff" "service" ];
       };
-      workflow = {
-        group = "materialsLifecycle";
-        transitions = [{
-          field = material.status;
-          from = [ materialStatus.draft ];
-          to = materialStatus.current;
-        }];
-        audit.summary = "Published production material";
-      };
+      transitions = [{
+        field = material.status;
+        from = [ materialStatus.draft ];
+        to = materialStatus.current;
+      }];
+      audit.summary = "Published production material";
       guard = E.eq (E.f material.status) (E.lit materialStatus.draft);
-      set = [
-        { field = material.status; value = materialStatus.current; }
-      ];
+      set.status.value = materialStatus.current;
       effects = [
-        { notify = { channel = "email"; template = "material_published"; to = "participants"; }; }
+        { notify = { template = ER.notifications.templates.material_published; to = ER.notifications.recipients.participants; }; }
       ];
     };
 
     archive = {
       relationships = [];
-      policy = {
+      presentation = {
         label = "Archive material";
+        group = "materialsLifecycle";
+      };
+      policy = {
         audiences = [ "staff" "service" ];
       };
-      workflow = {
-        group = "materialsLifecycle";
-        transitions = [{
-          field = material.status;
-          from = with materialStatus; [ draft current ];
-          to = materialStatus.archived;
-        }];
-        audit.summary = "Archived production material";
-      };
+      transitions = [{
+        field = material.status;
+        from = with materialStatus; [ draft current ];
+        to = materialStatus.archived;
+      }];
+      audit.summary = "Archived production material";
       guard = E.ne (E.f material.status) (E.lit materialStatus.archived);
-      set = [
-        { field = material.status; value = materialStatus.archived; }
-      ];
+      set.status.value = materialStatus.archived;
     };
   };
 
   operations.material_version = {
     mark_current = {
       relationships = [];
-      policy = {
+      presentation = {
         label = "Mark version current";
+        group = "materialsLifecycle";
+      };
+      policy = {
         audiences = [ "staff" "service" ];
       };
-      workflow = {
-        group = "materialsLifecycle";
-        transitions = [{
-          field = version.status;
-          from = [ versionStatus.draft ];
-          to = versionStatus.current;
-        }];
-        audit.summary = "Marked material version current";
-      };
+      transitions = [{
+        field = version.status;
+        from = [ versionStatus.draft ];
+        to = versionStatus.current;
+      }];
+      audit.summary = "Marked material version current";
       guard = E.eq (E.f version.status) (E.lit versionStatus.draft);
-      set = [
-        { field = version.status; value = versionStatus.current; }
-      ];
+      set.status.value = versionStatus.current;
     };
 
     supersede = {
       relationships = [];
-      policy = {
+      presentation = {
         label = "Supersede version";
+        group = "materialsLifecycle";
+      };
+      policy = {
         audiences = [ "staff" "service" ];
       };
-      workflow = {
-        group = "materialsLifecycle";
-        transitions = [{
-          field = version.status;
-          from = [ versionStatus.current ];
-          to = versionStatus.superseded;
-        }];
-        audit.summary = "Superseded material version";
-      };
+      transitions = [{
+        field = version.status;
+        from = [ versionStatus.current ];
+        to = versionStatus.superseded;
+      }];
+      audit.summary = "Superseded material version";
       guard = E.eq (E.f version.status) (E.lit versionStatus.current);
-      set = [
-        { field = version.status; value = versionStatus.superseded; }
-      ];
+      set.status.value = versionStatus.superseded;
     };
 
     archive = {
       relationships = [];
-      policy = {
+      presentation = {
         label = "Archive version";
+        group = "materialsLifecycle";
+      };
+      policy = {
         audiences = [ "staff" "service" ];
       };
-      workflow = {
-        group = "materialsLifecycle";
-        transitions = [{
-          field = version.status;
-          from = with versionStatus; [ draft current superseded ];
-          to = versionStatus.archived;
-        }];
-        audit.summary = "Archived material version";
-      };
+      transitions = [{
+        field = version.status;
+        from = with versionStatus; [ draft current superseded ];
+        to = versionStatus.archived;
+      }];
+      audit.summary = "Archived material version";
       guard = E.ne (E.f version.status) (E.lit versionStatus.archived);
-      set = [
-        { field = version.status; value = versionStatus.archived; }
-      ];
+      set.status.value = versionStatus.archived;
     };
   };
 }

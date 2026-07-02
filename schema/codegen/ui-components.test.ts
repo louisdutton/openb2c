@@ -36,13 +36,13 @@ function col(overrides: Partial<Column>): Column {
 }
 
 function op(overrides: Partial<Operation> = {}): Operation {
-  return { guard: null, relationships: [], public: false, scope: null, policy: {}, workflow: {}, audit: {}, set: {}, cascade: [], effects: [], ...overrides };
+  return { guard: null, relationships: [], public: false, scope: null, policy: {}, presentation: {}, transitions: [], audit: {}, set: {}, cascade: [], effects: [], ...overrides };
 }
 
 function navigationSchema(): Schema {
   return {
     organization: { name: "Navigation Test", description: "Navigation metadata test app", logo: null },
-    workflows: {
+    presentation: {
       groups: {
         issueLifecycle: {
           label: "Issue lifecycle",
@@ -88,7 +88,7 @@ function navigationSchema(): Schema {
     operations: {
       issue: {
         triage: op({
-          workflow: {
+          presentation: {
             group: "issueLifecycle",
           },
         }),

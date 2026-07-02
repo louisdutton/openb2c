@@ -13,7 +13,7 @@ export interface EnvVarSpec {
 function hasEmailEffects(schema: Schema): boolean {
   return Object.values(schema.operations).some(ops =>
     Object.values(ops).some(op =>
-      op.effects.some(effect => effect.notify?.channel === "email")
+      op.effects.some(effect => effect.notify?.template.channel === "email")
     )
   );
 }

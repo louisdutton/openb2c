@@ -3,6 +3,7 @@ let
   E = import ../lib/expr.nix;
   F = config.refs.transaction;
   V = config.values.transaction;
+  ER = config.effectRefs;
   ticket = config.refs.ticket;
   ticketStatus = config.values.ticket.status;
 in
@@ -62,10 +63,21 @@ in
     ];
   };
 
-  workflows.groups.paymentLifecycle = {
+  presentation.groups.paymentLifecycle = {
     label = "Payment lifecycle";
     description = "Payment settlement and refund operations.";
     displayPriority = 30;
+  };
+
+  effectContracts.notifications = {
+    templates.receipt = {};
+    templates.refund_confirmation = {};
+    recipients.customer = {};
+  };
+
+  effectContracts.calls = {
+    analytics.track_purchase = {};
+    payment.process_refund = {};
   };
 
   audit.entities.transaction = {
@@ -81,36 +93,32 @@ in
         required = true;
         category = "payment";
         reason = "Payment settlement must be auditable.";
+        summary = "Completed transaction";
       };
-      policy = {
+      presentation = {
         label = "Complete transaction";
         description = "Payment settlement operation usually performed by a payment service or staff operator.";
+        group = "paymentLifecycle";
+      };
+      policy = {
         audiences = [ "staff" "service" ];
         risk = "high";
       };
-      workflow = {
-        group = "paymentLifecycle";
-        transitions = [{
-          field = F.status;
-          from = [ V.status.pending ];
-          to = V.status.completed;
-        }];
-        audit.summary = "Completed transaction";
-      };
+      transitions = [{
+        field = F.status;
+        from = [ V.status.pending ];
+        to = V.status.completed;
+      }];
       guard = E.eq (E.f F.status) (E.lit V.status.pending);
-      set = [
-        { field = F.status; value = V.status.completed; }
-      ];
+      set.status.value = V.status.completed;
       cascade = [{
-        entity = "ticket";
-        via = "transaction_ticket";
-        set = [
-          { field = ticket.status; value = ticketStatus.confirmed; }
-        ];
+        entity = config.entityRefs.ticket;
+        via = config.entityRefs.transaction_ticket;
+        set.status.value = ticketStatus.confirmed;
       }];
       effects = [
-        { notify = { channel = "email"; template = "receipt"; }; }
-        { call = { service = "analytics"; action = "track_purchase"; }; }
+        { notify = { template = ER.notifications.templates.receipt; to = ER.notifications.recipients.customer; }; }
+        { call = ER.calls.analytics.track_purchase; }
       ];
     };
 
@@ -120,31 +128,27 @@ in
         required = true;
         category = "payment";
         reason = "Payment failure affects order and ticket state.";
+        summary = "Failed transaction";
+      };
+      presentation = {
+        label = "Fail transaction";
+        group = "paymentLifecycle";
       };
       policy = {
-        label = "Fail transaction";
         audiences = [ "staff" "service" ];
         risk = "high";
       };
-      workflow = {
-        group = "paymentLifecycle";
-        transitions = [{
-          field = F.status;
-          from = [ V.status.pending ];
-          to = V.status.failed;
-        }];
-        audit.summary = "Failed transaction";
-      };
+      transitions = [{
+        field = F.status;
+        from = [ V.status.pending ];
+        to = V.status.failed;
+      }];
       guard = E.eq (E.f F.status) (E.lit V.status.pending);
-      set = [
-        { field = F.status; value = V.status.failed; }
-      ];
+      set.status.value = V.status.failed;
       cascade = [{
-        entity = "ticket";
-        via = "transaction_ticket";
-        set = [
-          { field = ticket.status; value = ticketStatus.cancelled; }
-        ];
+        entity = config.entityRefs.ticket;
+        via = config.entityRefs.transaction_ticket;
+        set.status.value = ticketStatus.cancelled;
       }];
     };
 
@@ -154,20 +158,11 @@ in
         required = true;
         category = "payment";
         reason = "Refunds must be traceable for finance and support.";
+        summary = "Refunded transaction";
       };
-      policy = {
+      presentation = {
         label = "Refund transaction";
-        audiences = [ "staff" "service" ];
-        risk = "high";
-      };
-      workflow = {
         group = "paymentLifecycle";
-        transitions = [{
-          field = F.status;
-          from = [ V.status.completed ];
-          to = V.status.refunded;
-        }];
-        audit.summary = "Refunded transaction";
         confirmation = {
           required = true;
           title = "Refund transaction";
@@ -176,20 +171,25 @@ in
           severity = "danger";
         };
       };
+      policy = {
+        audiences = [ "staff" "service" ];
+        risk = "high";
+      };
+      transitions = [{
+        field = F.status;
+        from = [ V.status.completed ];
+        to = V.status.refunded;
+      }];
       guard = E.eq (E.f F.status) (E.lit V.status.completed);
-      set = [
-        { field = F.status; value = V.status.refunded; }
-      ];
+      set.status.value = V.status.refunded;
       cascade = [{
-        entity = "ticket";
-        via = "transaction_ticket";
-        set = [
-          { field = ticket.status; value = ticketStatus.cancelled; }
-        ];
+        entity = config.entityRefs.ticket;
+        via = config.entityRefs.transaction_ticket;
+        set.status.value = ticketStatus.cancelled;
       }];
       effects = [
-        { notify = { channel = "email"; template = "refund_confirmation"; }; }
-        { call = { service = "payment"; action = "process_refund"; }; }
+        { notify = { template = ER.notifications.templates.refund_confirmation; to = ER.notifications.recipients.customer; }; }
+        { call = ER.calls.payment.process_refund; }
       ];
     };
   };

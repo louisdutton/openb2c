@@ -17,7 +17,7 @@ function col(overrides: Partial<Column>): Column {
 }
 
 function op(overrides: Partial<Operation> = {}): Operation {
-  return { guard: null, relationships: [], public: false, scope: null, policy: {}, workflow: {}, audit: {}, set: {}, cascade: [], effects: [], ...overrides };
+  return { guard: null, relationships: [], public: false, scope: null, policy: {}, presentation: {}, transitions: [], audit: {}, set: {}, cascade: [], effects: [], ...overrides };
 }
 
 function schema(): Schema {
@@ -31,7 +31,7 @@ function schema(): Schema {
     },
     operations: {
       ticket: {
-        cancel: op({ set: { status: "cancelled" } }),
+        cancel: op({ set: { status: { value: "cancelled" } } }),
         ping: op(),
       },
     },

@@ -13,6 +13,7 @@ import { genServices } from "./services";
 import { genSQL } from "./sql";
 import { genTypes } from "./typescript";
 import type { Schema } from "./types";
+import { getEcommerceConfig } from "./utils";
 
 const PROJECT_ROOT = join(import.meta.dir, "..", "..");
 
@@ -87,10 +88,6 @@ function clearEnv() {
   delete process.env.STRIPE_API_BASE;
 }
 
-function ref(table: string, field: string, references: string | null = null) {
-  return { table, field, references };
-}
-
 function genericShopSchema(): Schema {
   return {
     organization: { name: "Generic Shop", description: "Generic ecommerce test" },
@@ -102,12 +99,12 @@ function genericShopSchema(): Schema {
         id: { type: "integer", pk: true, auto: true, required: false, unique: false, default: null, references: null },
         name: { type: "text", pk: false, auto: false, required: true, unique: false, default: null, references: null },
         price_pence: { type: "integer", pk: false, auto: false, required: true, unique: false, default: null, references: null },
-        status: { type: "text", pk: false, auto: false, required: true, unique: false, default: "'available'", references: null },
+        status: { type: "text", pk: false, auto: false, required: true, unique: false, default: "'available'", references: null, constraints: { enum: ["available", "unavailable"] } },
       },
       cart_order: {
         id: { type: "integer", pk: true, auto: true, required: false, unique: false, default: null, references: null },
         user_id: { type: "integer", pk: false, auto: false, required: true, unique: false, default: null, references: "user(id)" },
-        status: { type: "text", pk: false, auto: false, required: true, unique: false, default: "'checkout_pending'", references: null },
+        status: { type: "text", pk: false, auto: false, required: true, unique: false, default: "'checkout_pending'", references: null, constraints: { enum: ["checkout_pending", "paid", "expired", "cancelled"] } },
         amount_pence: { type: "integer", pk: false, auto: false, required: true, unique: false, default: null, references: null },
         currency: { type: "text", pk: false, auto: false, required: true, unique: false, default: "'GBP'", references: null },
         expires_at: { type: "text", pk: false, auto: false, required: true, unique: false, default: null, references: null },
@@ -119,8 +116,8 @@ function genericShopSchema(): Schema {
         product_id: { type: "integer", pk: false, auto: false, required: true, unique: false, default: null, references: "product(id)" },
         user_id: { type: "integer", pk: false, auto: false, required: true, unique: false, default: null, references: "user(id)" },
         price_pence: { type: "integer", pk: false, auto: false, required: true, unique: false, default: null, references: null },
-        status: { type: "text", pk: false, auto: false, required: true, unique: false, default: "'reserved'", references: null },
-        colour: { type: "text", pk: false, auto: false, required: false, unique: false, default: null, references: null },
+        status: { type: "text", pk: false, auto: false, required: true, unique: false, default: "'reserved'", references: null, constraints: { enum: ["reserved", "fulfilled", "cancelled"] } },
+        colour: { type: "text", pk: false, auto: false, required: false, unique: false, default: null, references: null, constraints: { enum: ["black", "white"] } },
       },
       cart_order_line: {
         id: { type: "integer", pk: true, auto: true, required: false, unique: false, default: null, references: null },
@@ -131,7 +128,7 @@ function genericShopSchema(): Schema {
         id: { type: "integer", pk: true, auto: true, required: false, unique: false, default: null, references: null },
         user_id: { type: "integer", pk: false, auto: false, required: true, unique: false, default: null, references: "user(id)" },
         amount_pence: { type: "integer", pk: false, auto: false, required: true, unique: false, default: null, references: null },
-        status: { type: "text", pk: false, auto: false, required: true, unique: false, default: "'pending'", references: null },
+        status: { type: "text", pk: false, auto: false, required: true, unique: false, default: "'pending'", references: null, constraints: { enum: ["pending", "completed", "failed"] } },
         reference: { type: "text", pk: false, auto: false, required: true, unique: true, default: null, references: null },
         client: { type: "text", pk: false, auto: false, required: false, unique: false, default: "'web'", references: null },
       },
@@ -142,68 +139,8 @@ function genericShopSchema(): Schema {
       },
     },
     operations: {},
-    ecommerce: {
+    commerce: {
       enabled: true,
-      catalog: {
-        entity: "product",
-        label: ref("product", "name"),
-        description: null,
-        price: ref("product", "price_pence"),
-        groupBy: [ref("product", "name")],
-        variantFields: [],
-        availability: { field: ref("product", "status"), available: "available" },
-      },
-      order: {
-        entity: "cart_order",
-        user: ref("cart_order", "user_id", "user(id)"),
-        status: ref("cart_order", "status"),
-        amount: ref("cart_order", "amount_pence"),
-        currency: ref("cart_order", "currency"),
-        expiresAt: ref("cart_order", "expires_at"),
-        paymentReference: ref("cart_order", "payment_reference"),
-        client: ref("cart_order", "client"),
-        pendingStatus: "checkout_pending",
-        paidStatus: "paid",
-        expiredStatus: "expired",
-        cancelledStatus: "cancelled",
-      },
-      lineItem: {
-        entity: "cart_line",
-        catalogItem: ref("cart_line", "product_id", "product(id)"),
-        user: ref("cart_line", "user_id", "user(id)"),
-        price: ref("cart_line", "price_pence"),
-        status: ref("cart_line", "status"),
-        quantity: null,
-        reservedStatus: "reserved",
-        fulfilledStatus: "fulfilled",
-        cancelledStatus: "cancelled",
-        options: {
-          colour: { field: ref("cart_line", "colour"), type: "text", label: "Colour", default: null, choices: ["black", "white"], required: false, min: null, max: null },
-        },
-      },
-      orderLine: {
-        entity: "cart_order_line",
-        order: ref("cart_order_line", "cart_order_id", "cart_order(id)"),
-        lineItem: ref("cart_order_line", "cart_line_id", "cart_line(id)"),
-      },
-      transaction: {
-        entity: "payment",
-        user: ref("payment", "user_id", "user(id)"),
-        amount: ref("payment", "amount_pence"),
-        type: null,
-        status: ref("payment", "status"),
-        reference: ref("payment", "reference"),
-        client: ref("payment", "client"),
-        purchaseType: "purchase",
-        pendingStatus: "pending",
-        completedStatus: "completed",
-        failedStatus: "failed",
-      },
-      transactionLine: {
-        entity: "payment_line",
-        transaction: ref("payment_line", "payment_id", "payment(id)"),
-        lineItem: ref("payment_line", "cart_line_id", "cart_line(id)"),
-      },
       checkout: { currency: "GBP", expiryMinutes: 15, maxQuantity: 20, maxLines: 50 },
     },
   };
@@ -260,7 +197,7 @@ describe("Duchy Opera commerce workflow", () => {
     });
   });
 
-  test("Duchy Opera ecommerce does not expose booking aliases unless explicitly enabled", async () => {
+  test("Duchy Opera commerce does not expose booking aliases", async () => {
     const schema = await loadDuchyOperaSchema();
     const services = genServices(schema);
     const routes = genRoutes(schema);
@@ -273,19 +210,6 @@ describe("Duchy Opera commerce workflow", () => {
     expect(mcp).not.toContain("reserve_booking");
     expect(effects).not.toContain('"booking.reserved"');
     expect(openapi.paths["/commerce/bookings/reserve"]).toBeUndefined();
-
-    const compatSchema: Schema = {
-      ...schema,
-      ecommerce: {
-        ...schema.ecommerce!,
-        compatibility: { bookingAliases: true },
-      },
-    };
-    expect(genServices(compatSchema)).toContain("ReserveBookingInput");
-    expect(genRoutes(compatSchema)).toContain("/commerce/bookings/reserve");
-    expect(genMcpServer(compatSchema)).toContain("reserve_booking");
-    expect(genEffectsInterface(compatSchema)).toContain('"booking.reserved"');
-    expect(JSON.parse(genOpenAPI(compatSchema)).paths["/commerce/bookings/reserve"]).toBeDefined();
   });
 
   test("commerce browser UI derives checkout user from auth context", async () => {
@@ -324,10 +248,11 @@ describe("Duchy Opera commerce workflow", () => {
 
   test("checks out a cart, creates a payment intent, confirms paid orders, and expires stale checkouts", async () => {
     const schema = await loadDuchyOperaSchema();
-    expect(schema.ecommerce?.enabled).toBe(true);
-    expect(schema.ecommerce?.catalog.entity).toBe("performance");
-    expect(schema.ecommerce?.order.entity).toBe("booking");
-    expect(schema.ecommerce?.lineItem.entity).toBe("ticket");
+    const commerce = getEcommerceConfig(schema);
+    expect(commerce?.enabled).toBe(true);
+    expect(commerce?.catalog.entity).toBe("performance");
+    expect(commerce?.order.entity).toBe("booking");
+    expect(commerce?.lineItem.entity).toBe("ticket");
 
     const dir = writeGenerated(schema);
     const dbPath = join(dir, "duchy-commerce.sqlite");

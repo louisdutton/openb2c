@@ -3,6 +3,7 @@ let
   E = import ../lib/expr.nix;
   F = config.refs.issue;
   V = config.values.issue;
+  ER = config.effectRefs;
   project = config.entityRefs.project;
   projectStatus = config.values.project.status;
 in
@@ -54,10 +55,23 @@ in
     updated_at = { type = "text"; default = "CURRENT_TIMESTAMP"; };
   };
 
-  workflows.groups.issueWorkflow = {
+  presentation.groups.issueWorkflow = {
     label = "Issue workflow";
     description = "Issue progress, review, completion, and escalation operations.";
     displayPriority = 40;
+  };
+
+  effectContracts = {
+    events.issue_completed = {};
+    notifications = {
+      templates = {
+        issue_started = {};
+        issue_review_requested = {};
+        issue_assigned = {};
+        issue_escalated = {};
+      };
+      recipients.customer = {};
+    };
   };
 
   operations.issue = {
@@ -66,77 +80,59 @@ in
     update.relationships = [ "creator" "assignee" ];
 
     start = {
-      workflow = {
-        group = "issueWorkflow";
-        transitions = [{
-          field = F.status;
-          from = [ V.status.todo ];
-          to = V.status.in_progress;
-        }];
-        audit.summary = "Started issue";
-      };
+      presentation.group = "issueWorkflow";
+      transitions = [{
+        field = F.status;
+        from = [ V.status.todo ];
+        to = V.status.in_progress;
+      }];
+      audit.summary = "Started issue";
       guard = E.and
         (E.and
           (E.eq (E.f F.status) (E.lit V.status.todo))
           (E.notNull (E.f F.assignee_id)))
         (E.eq (E.rel project config.refs.project.status) (E.lit projectStatus.active));
-      set = [
-        { field = F.status; value = V.status.in_progress; }
-      ];
+      set.status.value = V.status.in_progress;
       effects = [
-        { notify = { channel = "email"; template = "issue_started"; }; }
+        { notify = { template = ER.notifications.templates.issue_started; to = ER.notifications.recipients.customer; }; }
       ];
     };
 
     submit_for_review = {
-      workflow = {
-        group = "issueWorkflow";
-        transitions = [{
-          field = F.status;
-          from = [ V.status.in_progress ];
-          to = V.status.in_review;
-        }];
-        audit.summary = "Submitted issue for review";
-      };
+      presentation.group = "issueWorkflow";
+      transitions = [{
+        field = F.status;
+        from = [ V.status.in_progress ];
+        to = V.status.in_review;
+      }];
+      audit.summary = "Submitted issue for review";
       guard = E.eq (E.f F.status) (E.lit V.status.in_progress);
-      set = [
-        { field = F.status; value = V.status.in_review; }
-      ];
+      set.status.value = V.status.in_review;
       effects = [
-        { notify = { channel = "email"; template = "issue_review_requested"; }; }
+        { notify = { template = ER.notifications.templates.issue_review_requested; to = ER.notifications.recipients.customer; }; }
       ];
     };
 
     complete = {
-      workflow = {
-        group = "issueWorkflow";
-        transitions = [{
-          field = F.status;
-          from = with V.status; [ in_review in_progress ];
-          to = V.status.done;
-        }];
-        audit.summary = "Completed issue";
-      };
+      presentation.group = "issueWorkflow";
+      transitions = [{
+        field = F.status;
+        from = with V.status; [ in_review in_progress ];
+        to = V.status.done;
+      }];
+      audit.summary = "Completed issue";
       guard = E.or
         (E.eq (E.f F.status) (E.lit V.status.in_review))
         (E.eq (E.f F.status) (E.lit V.status.in_progress));
-      set = [
-        { field = F.status; value = V.status.done; }
-      ];
+      set.status.value = V.status.done;
       effects = [
-        { emit = "issue.completed"; }
+        { emit = ER.events.issue_completed; }
       ];
     };
 
     cancel = {
-      workflow = {
+      presentation = {
         group = "issueWorkflow";
-        transitions = [{
-          field = F.status;
-          from = with V.status; [ todo in_progress in_review ];
-          to = V.status.cancelled;
-        }];
-        audit.summary = "Cancelled issue";
         confirmation = {
           required = true;
           title = "Cancel issue";
@@ -145,62 +141,57 @@ in
           severity = "warning";
         };
       };
+      transitions = [{
+        field = F.status;
+        from = with V.status; [ todo in_progress in_review ];
+        to = V.status.cancelled;
+      }];
+      audit.summary = "Cancelled issue";
       guard = E.and
         (E.ne (E.f F.status) (E.lit V.status.done))
         (E.ne (E.f F.status) (E.lit V.status.cancelled));
-      set = [
-        { field = F.status; value = V.status.cancelled; }
-      ];
+      set.status.value = V.status.cancelled;
     };
 
     reopen = {
-      workflow = {
-        group = "issueWorkflow";
-        transitions = [{
-          field = F.status;
-          from = with V.status; [ done cancelled ];
-          to = V.status.todo;
-        }];
-        audit.summary = "Reopened issue";
-      };
+      presentation.group = "issueWorkflow";
+      transitions = [{
+        field = F.status;
+        from = with V.status; [ done cancelled ];
+        to = V.status.todo;
+      }];
+      audit.summary = "Reopened issue";
       guard = E.or
         (E.eq (E.f F.status) (E.lit V.status.done))
         (E.eq (E.f F.status) (E.lit V.status.cancelled));
-      set = [
-        { field = F.status; value = V.status.todo; }
-      ];
+      set.status.value = V.status.todo;
     };
 
     assign = {
       relationships = [];
-      policy = {
+      presentation = {
         label = "Assign issue";
         description = "Staff workflow operation for changing issue ownership.";
+        group = "issueWorkflow";
+      };
+      policy = {
         audiences = [ "staff" ];
       };
-      workflow = {
-        group = "issueWorkflow";
-        audit.summary = "Assigned issue";
-      };
+      audit.summary = "Assigned issue";
       guard = E.and
         (E.ne (E.f F.status) (E.lit V.status.done))
         (E.ne (E.f F.status) (E.lit V.status.cancelled));
       set = { };  # assignee_id set via parameters
       effects = [
-        { notify = { channel = "email"; template = "issue_assigned"; }; }
+        { notify = { template = ER.notifications.templates.issue_assigned; to = ER.notifications.recipients.customer; }; }
       ];
     };
 
     escalate = {
       relationships = [];
-      policy = {
+      presentation = {
         label = "Escalate issue";
-        audiences = [ "staff" ];
-        risk = "high";
-      };
-      workflow = {
         group = "issueWorkflow";
-        audit.summary = "Escalated issue";
         confirmation = {
           required = true;
           title = "Escalate issue";
@@ -209,14 +200,17 @@ in
           severity = "warning";
         };
       };
+      policy = {
+        audiences = [ "staff" ];
+        risk = "high";
+      };
+      audit.summary = "Escalated issue";
       guard = E.and
         (E.ne (E.f F.priority) (E.lit V.priority.urgent))
         (E.ne (E.f F.status) (E.lit V.status.done));
-      set = [
-        { field = F.priority; value = V.priority.urgent; }
-      ];
+      set.priority.value = V.priority.urgent;
       effects = [
-        { notify = { channel = "email"; template = "issue_escalated"; }; }
+        { notify = { template = ER.notifications.templates.issue_escalated; to = ER.notifications.recipients.customer; }; }
       ];
     };
   };

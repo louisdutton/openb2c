@@ -3,6 +3,7 @@ let
   E = import ../lib/expr.nix;
   F = config.refs.ticket;
   V = config.values.ticket;
+  ER = config.effectRefs;
   performance = config.entityRefs.performance;
   performanceStatus = config.values.performance.status;
 in
@@ -106,53 +107,47 @@ in
     reason = "Tickets represent customer entitlements and admission state.";
   };
 
-  workflows.groups.ticketLifecycle = {
+  presentation.groups.ticketLifecycle = {
     label = "Ticket lifecycle";
     description = "Customer and staff operations that move a ticket from reservation through admission or cancellation.";
     displayPriority = 20;
   };
 
+  effectContracts.notifications = {
+    templates.ticket_confirmation = {};
+    recipients.customer = {};
+  };
+
   operations.ticket = {
     confirm = {
-      policy = {
+      presentation = {
         label = "Confirm ticket";
         description = "Customer or user-bound service confirms a reserved ticket.";
+        group = "ticketLifecycle";
+      };
+      policy = {
         audiences = [ "customer" "service" ];
       };
-      workflow = {
-        group = "ticketLifecycle";
-        transitions = [{
-          field = F.status;
-          from = [ V.status.reserved ];
-          to = V.status.confirmed;
-        }];
-        audit.summary = "Confirmed ticket";
-      };
+      transitions = [{
+        field = F.status;
+        from = [ V.status.reserved ];
+        to = V.status.confirmed;
+      }];
+      audit.summary = "Confirmed ticket";
       guard = E.and
         (E.eq (E.f F.status) (E.lit V.status.reserved))
         # Can't confirm if performance is cancelled
         (E.ne (E.rel performance config.refs.performance.status) (E.lit performanceStatus.cancelled));
-      set = [
-        { field = F.status; value = V.status.confirmed; }
-      ];
+      set.status.value = V.status.confirmed;
       effects = [
-        { notify = { channel = "email"; template = "ticket_confirmation"; }; }
+        { notify = { template = ER.notifications.templates.ticket_confirmation; to = ER.notifications.recipients.customer; }; }
       ];
     };
 
     cancel = {
-      policy = {
+      presentation = {
         label = "Cancel ticket";
-        audiences = [ "customer" "service" ];
-      };
-      workflow = {
         group = "ticketLifecycle";
-        transitions = [{
-          field = F.status;
-          from = with V.status; [ reserved confirmed ];
-          to = V.status.cancelled;
-        }];
-        audit.summary = "Cancelled ticket";
         confirmation = {
           required = true;
           title = "Cancel ticket";
@@ -161,12 +156,19 @@ in
           severity = "warning";
         };
       };
+      policy = {
+        audiences = [ "customer" "service" ];
+      };
+      transitions = [{
+        field = F.status;
+        from = with V.status; [ reserved confirmed ];
+        to = V.status.cancelled;
+      }];
+      audit.summary = "Cancelled ticket";
       guard = E.or
         (E.eq (E.f F.status) (E.lit V.status.reserved))
         (E.eq (E.f F.status) (E.lit V.status.confirmed));
-      set = [
-        { field = F.status; value = V.status.cancelled; }
-      ];
+      set.status.value = V.status.cancelled;
     };
 
     use = {
@@ -175,27 +177,25 @@ in
         required = true;
         category = "workflow";
         reason = "Ticket admission must be traceable for venue operations.";
+        summary = "Marked ticket as used";
       };
-      policy = {
+      presentation = {
         label = "Use ticket";
         description = "Staff check-in operation for admitting a confirmed ticket.";
+        group = "ticketLifecycle";
+      };
+      policy = {
         audiences = [ "staff" "service" ];
       };
-      workflow = {
-        group = "ticketLifecycle";
-        transitions = [{
-          field = F.status;
-          from = [ V.status.confirmed ];
-          to = V.status.used;
-        }];
-        audit.summary = "Marked ticket as used";
-      };
+      transitions = [{
+        field = F.status;
+        from = [ V.status.confirmed ];
+        to = V.status.used;
+      }];
       guard = E.and
         (E.eq (E.f F.status) (E.lit V.status.confirmed))
         (E.eq (E.rel performance config.refs.performance.status) (E.lit performanceStatus.scheduled));
-      set = [
-        { field = F.status; value = V.status.used; }
-      ];
+      set.status.value = V.status.used;
     };
 
     upgrade = {
@@ -203,26 +203,24 @@ in
         required = true;
         category = "payment";
         reason = "Ticket upgrades can affect customer entitlement and price.";
+        summary = "Upgraded ticket";
+      };
+      presentation = {
+        label = "Upgrade ticket";
+        group = "ticketLifecycle";
       };
       policy = {
-        label = "Upgrade ticket";
         audiences = [ "customer" "service" ];
       };
-      workflow = {
-        group = "ticketLifecycle";
-        transitions = [{
-          field = F.ticket_type;
-          from = [ V.ticket_type.standard ];
-          to = V.ticket_type.vip;
-        }];
-        audit.summary = "Upgraded ticket";
-      };
+      transitions = [{
+        field = F.ticket_type;
+        from = [ V.ticket_type.standard ];
+        to = V.ticket_type.vip;
+      }];
       guard = E.and
         (E.eq (E.f F.ticket_type) (E.lit V.ticket_type.standard))
         (E.eq (E.f F.status) (E.lit V.status.confirmed));
-      set = [
-        { field = F.ticket_type; value = V.ticket_type.vip; }
-      ];
+      set.ticket_type.value = V.ticket_type.vip;
     };
   };
 }

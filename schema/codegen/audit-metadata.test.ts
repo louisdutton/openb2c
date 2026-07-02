@@ -45,7 +45,7 @@ function col(overrides: Partial<Column>): Column {
 }
 
 function op(overrides: Partial<Operation> = {}): Operation {
-  return { guard: null, relationships: [], public: false, scope: null, policy: {}, workflow: {}, audit: {}, set: {}, cascade: [], effects: [], ...overrides };
+  return { guard: null, relationships: [], public: false, scope: null, policy: {}, presentation: {}, transitions: [], audit: {}, set: {}, cascade: [], effects: [], ...overrides };
 }
 
 function auditSchema(): Schema {
@@ -74,7 +74,7 @@ function auditSchema(): Schema {
             category: "payment",
             reason: "Cancellation can affect refunds.",
           },
-          set: { status: "cancelled" },
+          set: { status: { value: "cancelled" } },
         }),
       },
     },

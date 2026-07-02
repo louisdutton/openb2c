@@ -1,4 +1,5 @@
-import type { AppMetadata, EcommerceConfig, FieldRef, OrganizationMetadata, Schema, Tables } from "./types";
+import type { AppMetadata, FieldRef, InferredCommerceConfig, OrganizationMetadata, Schema, Tables } from "./types";
+import { inferCommerceConfig } from "./inference";
 
 export const TS_TYPE_MAP: Record<string, string> = {
   integer: "number",
@@ -78,22 +79,21 @@ export function getDefaultDatabasePath(app: AppMetadata): string {
   return `${safeSlug(app.slug)}.db`;
 }
 
-export function hasCommerceWorkflow(schema: { tables: Tables; ecommerce?: EcommerceConfig } | Schema): boolean {
-  return schema.ecommerce?.enabled === true;
+export function hasCommerceWorkflow(schema: { tables: Tables; commerce?: { enabled?: boolean } } | Schema): boolean {
+  return schema.commerce?.enabled === true;
 }
 
-export function hasCommerceBookingAliases(schema: { ecommerce?: EcommerceConfig } | Schema): boolean {
-  return schema.ecommerce?.enabled === true && schema.ecommerce.compatibility?.bookingAliases === true;
+export function hasCommerceBookingAliases(_schema: { commerce?: { enabled?: boolean } } | Schema): boolean {
+  return false;
 }
 
 export function requiredFieldRef(name: string, ref: FieldRef | null | undefined): FieldRef {
-  if (!ref) throw new Error(`ecommerce.${name} is required when ecommerce is enabled`);
+  if (!ref) throw new Error(`commerce.${name} is required when commerce is enabled`);
   return ref;
 }
 
-export function getEcommerceConfig(schema: Schema): EcommerceConfig | null {
-  if (!schema.ecommerce?.enabled) return null;
-  return schema.ecommerce;
+export function getEcommerceConfig(schema: Schema): InferredCommerceConfig | null {
+  return inferCommerceConfig(schema);
 }
 
 export function openApiEcommerceMetadata(schema: Schema): unknown | undefined {

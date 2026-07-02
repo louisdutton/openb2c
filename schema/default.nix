@@ -18,10 +18,13 @@ let
 in {
   organization = modules.config.organization;
   integrations = modules.config.integrations;
+  effectContracts = modules.config.effectContracts;
+  presentation = modules.config.presentation;
   tables = modules.config.tables;
   refs = modules.config.refs;
+  entityRefs = modules.config.entityRefs;
   relationships = modules.config.relationships;
   constraints = modules.config.constraints;
   operations = composeLib.processOperations modules.config.tables modules.config.relationships modules.config.operations;
-  ecommerce = modules.config.ecommerce;
+  commerce = modules.config.commerce;
 }

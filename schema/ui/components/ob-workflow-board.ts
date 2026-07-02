@@ -191,14 +191,13 @@ export class ObWorkflowBoard extends HTMLElement {
 
   private _operationViews(api: ObApi, screen: WorkflowScreen, row: Record<string, unknown>): WorkflowAction[] {
     return api.getWorkflowOperations(screen.entity, screen.id).map((op) => {
-      const policy = api.getOperationPolicy(screen.entity, op) || {};
       const workflow = api.getOperationWorkflow(screen.entity, op) || {};
-      const label = policy.label || displayOperation(op);
+      const label = workflow.label || displayOperation(op);
       const availability = operationAvailability(row, workflow, label);
       return {
         op,
         label,
-        description: policy.description || workflow.audit?.summary || "",
+        description: workflow.description || workflow.audit?.summary || "",
         workflow,
         available: availability.available,
         unavailableReason: availability.reason,
@@ -247,8 +246,7 @@ export class ObWorkflowBoard extends HTMLElement {
         const error = await res.json().catch(() => ({ error: "Operation failed" }));
         this._error = error.error || "Operation failed";
       } else {
-        const policy = api.getOperationPolicy(screen.entity, op) || {};
-        this._message = `${policy.label || displayOperation(op)} completed.`;
+        this._message = `${workflow.label || displayOperation(op)} completed.`;
         this._confirmKey = "";
       }
     } catch (error: any) {
