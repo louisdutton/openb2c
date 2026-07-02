@@ -71,7 +71,7 @@ describe("inference report", () => {
       operations: {},
       commerce: {
         enabled: true,
-        checkout: { currency: "GBP", expiryMinutes: 15, maxQuantity: 20, maxLines: 50 },
+        checkout: { currency: "GBP", expiryMinutes: 15, paymentDeadlineMinutes: 30, allowAsyncPayments: false, maxQuantity: 20, maxLines: 50 },
       },
     };
 

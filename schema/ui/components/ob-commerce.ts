@@ -57,7 +57,7 @@ export class ObCommerce extends HTMLElement {
   private _optionState: Record<string, string> = {};
   private _cart: CartLine[] = [];
   private _checkoutResult: any = null;
-  private _paymentIntent: any = null;
+  private _paymentSession: any = null;
   private _error = "";
   private _loading = false;
   private _reviewingCart = false;
@@ -212,7 +212,7 @@ export class ObCommerce extends HTMLElement {
       button.addEventListener("click", () => {
         this._cart = this._cart.filter((line) => line.id !== button.dataset.removeLine);
         this._checkoutResult = null;
-        this._paymentIntent = null;
+        this._paymentSession = null;
         if (this._cart.length === 0) this._reviewingCart = false;
         this._render();
       });
@@ -252,14 +252,14 @@ export class ObCommerce extends HTMLElement {
       this._error = "Sign in to continue.";
       this._render();
     });
-    this.shadowRoot!.querySelector<HTMLButtonElement>('[data-action="payment-intent"]')?.addEventListener("click", () => this._createPaymentIntent());
+    this.shadowRoot!.querySelector<HTMLButtonElement>('[data-action="payment-session"]')?.addEventListener("click", () => this._createPaymentSession());
     this.shadowRoot!.querySelector<HTMLButtonElement>('[data-action="start-over"]')?.addEventListener("click", () => {
       this._selectedGroup = "";
       this._selectedItemId = "";
       this._quantity = "1";
       this._cart = [];
       this._checkoutResult = null;
-      this._paymentIntent = null;
+      this._paymentSession = null;
       this._reviewingCart = false;
       this._error = "";
       this._render();
@@ -277,7 +277,7 @@ export class ObCommerce extends HTMLElement {
     lookups: LookupMap,
     optionDefs: Record<string, CommerceOption>,
   ): string {
-    if (this._paymentIntent) return this._renderCompleteStep();
+    if (this._paymentSession) return this._renderCompleteStep();
     if (this._checkoutResult) return this._renderPaymentStep();
     if (this._cart.length > 0 && this._reviewingCart) return this._renderReviewStep(api, config, lookups);
     if (selectedItem) return this._renderConfigureStep(optionDefs, selectedItem, config, lookups);
@@ -365,7 +365,7 @@ export class ObCommerce extends HTMLElement {
         </div>
         ${this._renderCheckoutSummary()}
         <div class="actions">
-          <button type="button" class="primary" data-action="payment-intent">Create payment intent</button>
+          <button type="button" class="primary" data-action="payment-session">Create payment session</button>
         </div>
       </section>
     `;
@@ -375,7 +375,7 @@ export class ObCommerce extends HTMLElement {
     return `
       <section class="panel" aria-labelledby="complete-title">
         <div class="panel-header">
-          <h2 id="complete-title">Payment ready</h2>
+          <h2 id="complete-title">Payment session ready</h2>
           <span class="step">Complete</span>
         </div>
         ${this._renderCheckoutSummary()}
@@ -571,8 +571,8 @@ export class ObCommerce extends HTMLElement {
   private _renderPaymentSummary(): string {
     return `
       <div class="summary">
-        <div class="summary-row"><span>Transaction</span><span>#${escapeHtml(this._paymentIntent.transaction_id)}</span></div>
-        <div class="summary-row"><span>Reference</span><span>${escapeHtml(this._paymentIntent.reference || "-")}</span></div>
+        <div class="summary-row"><span>Transaction</span><span>#${escapeHtml(this._paymentSession.transaction_id)}</span></div>
+        <div class="summary-row"><span>Reference</span><span>${escapeHtml(this._paymentSession.reference || "-")}</span></div>
       </div>
     `;
   }
@@ -624,7 +624,7 @@ export class ObCommerce extends HTMLElement {
       },
     ];
     this._checkoutResult = null;
-    this._paymentIntent = null;
+    this._paymentSession = null;
     this._reviewingCart = true;
     this._error = "";
     this._render();
@@ -692,7 +692,7 @@ export class ObCommerce extends HTMLElement {
         return;
       }
       this._checkoutResult = await res.json();
-      this._paymentIntent = null;
+      this._paymentSession = null;
       this._cart = [];
       this._reviewingCart = false;
       this._loading = false;
@@ -704,21 +704,21 @@ export class ObCommerce extends HTMLElement {
     }
   }
 
-  private async _createPaymentIntent() {
+  private async _createPaymentSession() {
     if (!this._checkoutResult?.order_id) return;
     try {
-      const res = await ObApi.instance!.request(`/commerce/orders/${this._checkoutResult.order_id}/payment-intent`, { method: "POST" });
+      const res = await ObApi.instance!.request(`/commerce/orders/${this._checkoutResult.order_id}/payment-session`, { method: "POST" });
       if (!res.ok) {
         const err = await res.json();
-        this._error = err.error || "Payment intent failed";
+        this._error = err.error || "Payment session failed";
         await this._render();
         return;
       }
-      this._paymentIntent = await res.json();
+      this._paymentSession = await res.json();
       this._error = "";
       await this._render();
     } catch (error: any) {
-      this._error = error.message || "Payment intent failed";
+      this._error = error.message || "Payment session failed";
       await this._render();
     }
   }

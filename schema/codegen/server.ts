@@ -46,16 +46,16 @@ function genConfiguredCommerceRoutes(schema: Schema): string[] {
     }
     return r.ok ? corsResponse(r.data, { status: 201 }) : corsResponse(r, { status: S.statusForResult(r) });
   }},
-  { method: "POST", path: "/commerce/bookings/:id/payment-intent", handler: async (req, p, auth) => {
-    const r = await S.createPaymentIntentForBooking(db, +p.id, auth);
+  { method: "POST", path: "/commerce/bookings/:id/payment-session", handler: async (req, p, auth) => {
+    const r = await S.createPaymentSessionForBooking(db, +p.id, auth);
     if (r.ok) {
       await FX.dispatchEffects(db, r.effects || [], {
         source: "rest",
-        operation: "commerce.create_payment_intent",
+        operation: "commerce.create_payment_session",
         entity: "booking",
         recordId: r.data.booking_id,
         result: r.data,
-        idempotencyKey: req.headers.get("Idempotency-Key") || ("booking-payment-intent:" + r.data.booking_id),
+        idempotencyKey: req.headers.get("Idempotency-Key") || ("booking-payment-session:" + r.data.booking_id),
       });
     }
     return r.ok ? corsResponse(r.data, { status: 201 }) : corsResponse(r, { status: S.statusForResult(r) });
@@ -89,16 +89,16 @@ function genConfiguredCommerceRoutes(schema: Schema): string[] {
     }
     return r.ok ? corsResponse(r.data, { status: 201 }) : corsResponse(r, { status: S.statusForResult(r) });
   }},
-  { method: "POST", path: "/commerce/orders/:id/payment-intent", handler: async (req, p, auth) => {
-    const r = await S.createCommercePaymentIntent(db, +p.id, auth);
+  { method: "POST", path: "/commerce/orders/:id/payment-session", handler: async (req, p, auth) => {
+    const r = await S.createCommercePaymentSession(db, +p.id, auth);
     if (r.ok) {
       await FX.dispatchEffects(db, r.effects || [], {
         source: "rest",
-        operation: "commerce.create_payment_intent",
+        operation: "commerce.create_payment_session",
         entity: "commerce_order",
         recordId: r.data.order_id,
         result: r.data,
-        idempotencyKey: req.headers.get("Idempotency-Key") || ("commerce-payment-intent:" + r.data.order_id),
+        idempotencyKey: req.headers.get("Idempotency-Key") || ("commerce-payment-session:" + r.data.order_id),
       });
     }
     return r.ok ? corsResponse(r.data, { status: 201 }) : corsResponse(r, { status: S.statusForResult(r) });
@@ -122,7 +122,7 @@ function genConfiguredCommerceRoutes(schema: Schema): string[] {
     }
     const input = parsePaymentWebhookInput(payload);
     if (!input.ok) return corsResponse(input, { status: S.statusForResult(input) });
-    const r = S.handleCommercePaymentWebhook(db, input.data);
+    const r = await S.handleCommercePaymentWebhook(db, input.data);
     if (r.ok) {
       await FX.dispatchEffects(db, r.effects || [], {
         source: "rest",
@@ -759,11 +759,15 @@ function parsePaymentWebhookInput(value: unknown): S.Result<S.PaymentWebhookInpu
   if (!isPlainObject(value)) return requestValidationError<S.PaymentWebhookInput>({ body: "body must be a JSON object" });
   const details: Record<string, string> = {};
   for (const key of Object.keys(value)) {
-    if (!["reference", "status", "provider"].includes(key)) details[key] = "field is not allowed";
+    if (!["event_id", "reference", "status", "provider", "occurred_at"].includes(key)) details[key] = "field is not allowed";
   }
+  if (typeof value.event_id !== "string" || value.event_id.length === 0) details.event_id = "event_id is required";
   if (typeof value.reference !== "string" || value.reference.length === 0) details.reference = "reference is required";
-  if (value.status !== "succeeded" && value.status !== "failed") details.status = "status must be succeeded or failed";
+  if (!["authorized", "captured", "failed", "cancelled", "refunded"].includes(String(value.status))) details.status = "status must be authorized, captured, failed, cancelled, or refunded";
   if (value.provider !== undefined && typeof value.provider !== "string") details.provider = "provider must be a string";
+  if (value.occurred_at !== undefined && (typeof value.occurred_at !== "string" || Number.isNaN(Date.parse(value.occurred_at)))) {
+    details.occurred_at = "occurred_at must be an ISO date-time";
+  }
   return Object.keys(details).length ? requestValidationError<S.PaymentWebhookInput>(details) : { ok: true, data: value as S.PaymentWebhookInput };
 }
 

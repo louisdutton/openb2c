@@ -58,12 +58,10 @@ const FALLBACK_INTEGRATIONS: IntegrationsConfig = {
     },
   },
   payment: {
-    provider: "stripe",
-    description: "Generated payment-intent provider.",
+    provider: "local",
+    description: "Generated provider-agnostic payment-session contract.",
     env: {
-      PAYMENT_PROVIDER: { description: "Payment provider identifier. Use stripe for production or local/fake for development.", requiredInProduction: true, secret: false, example: "stripe" },
-      PAYMENT_API_KEY: { description: "Payment provider API key. For Stripe, use a Stripe secret key.", requiredInProduction: true, secret: true },
-      STRIPE_API_BASE: { description: "Optional Stripe API endpoint override for tests or proxies.", requiredInProduction: false, secret: false, example: "https://api.stripe.com" },
+      PAYMENT_PROVIDER: { description: "Payment provider adapter identifier. V1 implements local/fake; production adapters are added explicitly.", requiredInProduction: false, secret: false, example: "local" },
     },
   },
   paymentWebhook: {

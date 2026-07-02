@@ -22,11 +22,20 @@ in
     status = {
       type = "text";
       default = "'checkout_pending'";
-      constraints.enum = [ "checkout_pending" "paid" "expired" "cancelled" ];
+      constraints.enum = [
+        "checkout_pending"
+        "payment_pending"
+        "paid"
+        "expired"
+        "cancelled"
+        "refund_required"
+        "refunded"
+      ];
     };
     amount_pence = { type = "integer"; required = true; };
     currency = { type = "text"; default = "'GBP'"; };
     expires_at = { type = "text"; required = true; };
+    payment_deadline_at = { type = "text"; };
     payment_reference = { type = "text"; };
     client = { type = "text"; default = "'web'"; };
     created_at = { type = "text"; default = "CURRENT_TIMESTAMP"; };
@@ -75,7 +84,9 @@ in
 
   operations.booking = {
     cancel = {
-      guard = E.eq (E.f F.status) (E.lit V.status.checkout_pending);
+      guard = E.or
+        (E.eq (E.f F.status) (E.lit V.status.checkout_pending))
+        (E.eq (E.f F.status) (E.lit V.status.payment_pending));
       set.status.value = V.status.cancelled;
       cascade = [{
         entity = config.entityRefs.ticket;

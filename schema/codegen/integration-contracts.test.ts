@@ -207,43 +207,25 @@ describe("integration provider contracts", () => {
     }
   });
 
-  test("Stripe PaymentIntent create and retrieve contract", async () => {
+  test("local payment session create and retrieve contract", async () => {
     const schema = await loadDuchyOperaSchema();
-    const dir = writeGenerated(schema, "openb2c-contract-stripe-");
-    const dbPath = join(dir, "stripe-contract.sqlite");
+    const dir = writeGenerated(schema, "openb2c-contract-payment-session-");
+    const dbPath = join(dir, "payment-session-contract.sqlite");
     const db = new Database(dbPath);
     applySql(db, schema);
     db.close();
     seedDuchyOpera(dbPath);
 
-    const stripeRequests: Array<{ method: string; path: string; headers: Record<string, string>; body: string }> = [];
-    const stripe = Bun.serve({
-      port: 0,
-      async fetch(req) {
-        const path = new URL(req.url).pathname;
-        const body = await req.text();
-        stripeRequests.push({ method: req.method, path, headers: Object.fromEntries(req.headers), body });
-        if (req.method === "POST" && path === "/v1/payment_intents") {
-          return Response.json({ id: "pi_contract_123", client_secret: "pi_contract_123_secret_abc" });
-        }
-        if (req.method === "GET" && path === "/v1/payment_intents/pi_contract_123") {
-          return Response.json({ id: "pi_contract_123", client_secret: "pi_contract_123_secret_abc" });
-        }
-        return Response.json({ error: "unexpected" }, { status: 404 });
-      },
-    });
     let server: Bun.Server | null = null;
 
     try {
       process.env.DB_PATH = dbPath;
       process.env.PORT = "0";
       process.env.AUTH_ENABLED = "false";
-      process.env.PAYMENT_PROVIDER = "stripe";
-      process.env.PAYMENT_API_KEY = "sk_test_contract";
+      process.env.PAYMENT_PROVIDER = "local";
       process.env.PAYMENT_WEBHOOK_SECRET = "contract-webhook-secret";
-      process.env.STRIPE_API_BASE = `http://127.0.0.1:${stripe.port}`;
 
-      ({ server } = await import(`${pathToFileURL(join(dir, "server.ts")).href}?stripe-contract=${Date.now()}`));
+      ({ server } = await import(`${pathToFileURL(join(dir, "server.ts")).href}?payment-session-contract=${Date.now()}`));
       const base = `http://127.0.0.1:${server.port}`;
 
       const checkout = await fetch(`${base}/commerce/checkout`, {
@@ -254,37 +236,22 @@ describe("integration provider contracts", () => {
       expect(checkout.status).toBe(201);
       const checkedOut = await checkout.json() as { order_id: number };
 
-      const intent = await fetch(`${base}/commerce/orders/${checkedOut.order_id}/payment-intent`, { method: "POST" });
-      expect(intent.status).toBe(201);
-      expect(await intent.json()).toMatchObject({
-        provider: "stripe",
-        reference: "pi_contract_123",
-        client_secret: "pi_contract_123_secret_abc",
+      const session = await fetch(`${base}/commerce/orders/${checkedOut.order_id}/payment-session`, { method: "POST" });
+      expect(session.status).toBe(201);
+      const body = await session.json() as { reference: string; client_secret: string; provider: string; status: string; payment_deadline_at: string };
+      expect(body).toMatchObject({
+        provider: "local",
+        status: "payment_pending",
       });
+      expect(body.reference).toStartWith("fake_ps_");
+      expect(body.client_secret).toBe(`${body.reference}_secret`);
+      expect(Date.parse(body.payment_deadline_at)).toBeGreaterThan(Date.now());
 
-      const repeated = await fetch(`${base}/commerce/orders/${checkedOut.order_id}/payment-intent`, { method: "POST" });
+      const repeated = await fetch(`${base}/commerce/orders/${checkedOut.order_id}/payment-session`, { method: "POST" });
       expect(repeated.status).toBe(201);
-
-      expect(stripeRequests).toHaveLength(2);
-      const create = stripeRequests[0];
-      expect(create).toMatchObject({ method: "POST", path: "/v1/payment_intents" });
-      expect(create.headers.authorization).toBe("Bearer sk_test_contract");
-      expect(create.headers["content-type"]).toContain("application/x-www-form-urlencoded");
-      expect(create.headers["idempotency-key"]).toBe(`openb2c-commerce-order-${checkedOut.order_id}`);
-      const body = new URLSearchParams(create.body);
-      expect(body.get("amount")).toBe("5000");
-      expect(body.get("currency")).toBe("gbp");
-      expect(body.get("automatic_payment_methods[enabled]")).toBe("true");
-      expect(body.get("metadata[openb2c_order_id]")).toBe(String(checkedOut.order_id));
-
-      expect(stripeRequests[1]).toMatchObject({
-        method: "GET",
-        path: "/v1/payment_intents/pi_contract_123",
-      });
-      expect(stripeRequests[1].headers.authorization).toBe("Bearer sk_test_contract");
+      expect(await repeated.json()).toMatchObject({ reference: body.reference, provider: "local" });
     } finally {
       server?.stop(true);
-      stripe.stop(true);
       clearEnv();
     }
   });

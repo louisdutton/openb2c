@@ -239,12 +239,16 @@ export interface CommerceOrderConfig {
   amount: FieldRef | null;
   currency: FieldRef | null;
   expiresAt: FieldRef | null;
+  paymentDeadlineAt: FieldRef | null;
   paymentReference: FieldRef | null;
   client: FieldRef | null;
   pendingStatus: string;
+  paymentPendingStatus: string;
   paidStatus: string;
   expiredStatus: string;
   cancelledStatus: string;
+  refundRequiredStatus: string;
+  refundedStatus: string;
 }
 
 export interface CommerceLineItemConfig {
@@ -277,8 +281,12 @@ export interface CommerceTransactionConfig {
   client: FieldRef | null;
   purchaseType: string;
   pendingStatus: string;
+  authorizedStatus: string;
   completedStatus: string;
   failedStatus: string;
+  cancelledStatus: string;
+  refundRequiredStatus: string;
+  refundedStatus: string;
 }
 
 export interface InferredCommerceConfig {
@@ -292,6 +300,8 @@ export interface InferredCommerceConfig {
   checkout: {
     currency: string;
     expiryMinutes: number;
+    paymentDeadlineMinutes: number;
+    allowAsyncPayments: boolean;
     maxQuantity: number;
     maxLines: number;
   };
@@ -302,6 +312,8 @@ export interface CommerceConfig {
   checkout: {
     currency: string;
     expiryMinutes: number;
+    paymentDeadlineMinutes: number;
+    allowAsyncPayments: boolean;
     maxQuantity: number;
     maxLines: number;
   };

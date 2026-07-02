@@ -64,10 +64,10 @@ describe("generated UI browser automation", () => {
       await page.getByRole("heading", { name: "Review cart" }).waitFor();
       await page.getByRole("button", { name: "Checkout" }).click();
       await page.getByRole("heading", { name: "Confirm payment" }).waitFor();
-      await page.getByRole("button", { name: "Create payment intent" }).click();
+      await page.getByRole("button", { name: "Create payment session" }).click();
 
-      await page.getByRole("heading", { name: "Payment ready" }).waitFor();
-      await page.getByText(/fake_pi_/).waitFor();
+      await page.getByRole("heading", { name: "Payment session ready" }).waitFor();
+      await page.getByText(/fake_ps_/).waitFor();
       expect(errors).toEqual([]);
     } finally {
       await context.close();

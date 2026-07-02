@@ -196,11 +196,12 @@ function commerceReport(schema: Schema): CommerceInferenceReport {
         fieldEvidence(config.lineItem.catalogItem),
         fieldEvidence(config.catalog.price),
       ]),
-      order: choice(config.order.entity, "order inferred from checkout status enum, user FK, amount, currency, expiry, and payment reference", [
+      order: choice(config.order.entity, "order inferred from checkout/payment status enum, user FK, amount, currency, expiry, payment deadline, and payment reference", [
         fieldEvidence(config.order.user),
         fieldEvidence(config.order.status),
         fieldEvidence(config.order.amount),
         fieldEvidence(config.order.expiresAt),
+        fieldEvidence(config.order.paymentDeadlineAt),
       ]),
       lineItem: choice(config.lineItem.entity, "line item inferred from reserved/cancelled status, price, and catalog FK", [
         fieldEvidence(config.lineItem.catalogItem),

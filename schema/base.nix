@@ -343,21 +343,13 @@ let
       payment = lib.mkOption {
         type = integrationEndpointType;
         default = {
-          provider = "stripe";
-          description = "Generated payment-intent provider.";
+          provider = "local";
+          description = "Generated provider-agnostic payment-session contract.";
           env = {
             PAYMENT_PROVIDER = {
-              description = "Payment provider identifier. Use stripe for production or local/fake for development.";
-              example = "stripe";
-            };
-            PAYMENT_API_KEY = {
-              description = "Payment provider API key. For Stripe, use a Stripe secret key.";
-              secret = true;
-            };
-            STRIPE_API_BASE = {
-              description = "Optional Stripe API endpoint override for tests or proxies.";
+              description = "Payment provider adapter identifier. V1 implements local/fake; production adapters are added explicitly.";
               requiredInProduction = false;
-              example = "https://api.stripe.com";
+              example = "local";
             };
           };
         };
@@ -669,6 +661,8 @@ let
           options = {
             currency = lib.mkOption { type = lib.types.str; default = "GBP"; };
             expiryMinutes = lib.mkOption { type = lib.types.int; default = 15; };
+            paymentDeadlineMinutes = lib.mkOption { type = lib.types.int; default = 30; };
+            allowAsyncPayments = lib.mkOption { type = lib.types.bool; default = false; };
             maxQuantity = lib.mkOption { type = lib.types.int; default = 20; };
             maxLines = lib.mkOption { type = lib.types.int; default = 50; };
           };

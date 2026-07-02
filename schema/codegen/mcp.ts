@@ -484,9 +484,9 @@ ${operationExtras}      inputSchema: {
         return { content: [{ type: "text", text: JSON.stringify(checkoutCartResult.data) }] };`);
 
     tools.push(`    {
-      name: "create_order_payment_intent",
-      description: "Create a payment intent for a commerce order",
-      annotations: ${JSON.stringify(toolAnnotations("Create order payment intent", {
+      name: "create_order_payment_session",
+      description: "Create a payment session for a commerce order",
+      annotations: ${JSON.stringify(toolAnnotations("Create order payment session", {
         readOnly: false,
         destructive: false,
         idempotent: false,
@@ -498,18 +498,18 @@ ${operationExtras}      inputSchema: {
         required: ["order_id"],
       },
     }`);
-    toolAuthz.push(`  "create_order_payment_intent": { entity: "${commerceOrderEntity}", action: "update" }`);
-    handlers.push(`      case "create_order_payment_intent":
-        const orderPaymentIntentResult = await S.createCommercePaymentIntent(db, args.order_id as number, auth);
-        if (!orderPaymentIntentResult.ok) return { content: [{ type: "text", text: orderPaymentIntentResult.error }], isError: true };
-        await FX.dispatchEffects(db, orderPaymentIntentResult.effects || [], {
+    toolAuthz.push(`  "create_order_payment_session": { entity: "${commerceOrderEntity}", action: "update" }`);
+    handlers.push(`      case "create_order_payment_session":
+        const orderPaymentSessionResult = await S.createCommercePaymentSession(db, args.order_id as number, auth);
+        if (!orderPaymentSessionResult.ok) return { content: [{ type: "text", text: orderPaymentSessionResult.error }], isError: true };
+        await FX.dispatchEffects(db, orderPaymentSessionResult.effects || [], {
           source: "mcp",
-          operation: "commerce.create_payment_intent",
+          operation: "commerce.create_payment_session",
           entity: "commerce_order",
-          recordId: orderPaymentIntentResult.data.order_id,
-          result: orderPaymentIntentResult.data,
+          recordId: orderPaymentSessionResult.data.order_id,
+          result: orderPaymentSessionResult.data,
         });
-        return { content: [{ type: "text", text: JSON.stringify(orderPaymentIntentResult.data) }] };`);
+        return { content: [{ type: "text", text: JSON.stringify(orderPaymentSessionResult.data) }] };`);
 
     tools.push(`    {
       name: "expire_commerce_orders",
@@ -574,9 +574,9 @@ ${operationExtras}      inputSchema: {
         return { content: [{ type: "text", text: JSON.stringify(reserveBookingResult.data) }] };`);
 
     tools.push(`    {
-      name: "create_booking_payment_intent",
-      description: "Create a payment intent for a booking",
-      annotations: ${JSON.stringify(toolAnnotations("Create booking payment intent", {
+      name: "create_booking_payment_session",
+      description: "Create a payment session for a booking",
+      annotations: ${JSON.stringify(toolAnnotations("Create booking payment session", {
         readOnly: false,
         destructive: false,
         idempotent: false,
@@ -588,18 +588,18 @@ ${operationExtras}      inputSchema: {
         required: ["booking_id"],
       },
     }`);
-    toolAuthz.push(`  "create_booking_payment_intent": { entity: "${commerceOrderEntity}", action: "update" }`);
-    handlers.push(`      case "create_booking_payment_intent":
-        const paymentIntentResult = await S.createPaymentIntentForBooking(db, args.booking_id as number, auth);
-        if (!paymentIntentResult.ok) return { content: [{ type: "text", text: paymentIntentResult.error }], isError: true };
-        await FX.dispatchEffects(db, paymentIntentResult.effects || [], {
+    toolAuthz.push(`  "create_booking_payment_session": { entity: "${commerceOrderEntity}", action: "update" }`);
+    handlers.push(`      case "create_booking_payment_session":
+        const paymentSessionResult = await S.createPaymentSessionForBooking(db, args.booking_id as number, auth);
+        if (!paymentSessionResult.ok) return { content: [{ type: "text", text: paymentSessionResult.error }], isError: true };
+        await FX.dispatchEffects(db, paymentSessionResult.effects || [], {
           source: "mcp",
-          operation: "commerce.create_payment_intent",
+          operation: "commerce.create_payment_session",
           entity: "booking",
-          recordId: paymentIntentResult.data.booking_id,
-          result: paymentIntentResult.data,
+          recordId: paymentSessionResult.data.booking_id,
+          result: paymentSessionResult.data,
         });
-        return { content: [{ type: "text", text: JSON.stringify(paymentIntentResult.data) }] };`);
+        return { content: [{ type: "text", text: JSON.stringify(paymentSessionResult.data) }] };`);
 
     tools.push(`    {
       name: "expire_checkout_bookings",

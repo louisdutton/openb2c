@@ -84,7 +84,7 @@ describe("integration configuration metadata", () => {
     const duchyOpera = await loadExampleSchema("duchyopera");
 
     expect(duchyOpera.integrations?.identityEmail.provider).toBe("resend");
-    expect(duchyOpera.integrations?.payment.provider).toBe("stripe");
+    expect(duchyOpera.integrations?.payment.provider).toBe("local");
     expect(duchyOpera.integrations?.webhookEffects.signing).toMatchObject({
       enabled: true,
       algorithm: "sha256",
@@ -111,7 +111,7 @@ describe("integration configuration metadata", () => {
     expect(example).not.toContain("WEBHOOK_SIGNING_SECRET=");
 
     const openapi = JSON.parse(genOpenAPI(duchyOpera));
-    expect(openapi["x-openb2c-integrations"].payment.provider).toBe("stripe");
+    expect(openapi["x-openb2c-integrations"].payment.provider).toBe("local");
     expect(openapi["x-openb2c-integrations"].identityEmail.env.RESEND_API_KEY.secret).toBe(true);
   });
 

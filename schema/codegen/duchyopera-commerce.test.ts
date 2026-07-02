@@ -66,6 +66,16 @@ function seedDuchyOpera(dbPath: string, options: { venueCapacity?: number } = {}
   }
 }
 
+function applyDuchySchema(schema: Schema, dbPath: string, options: { venueCapacity?: number } = {}) {
+  const db = new Database(dbPath);
+  try {
+    for (const stmt of genSQL(schema.tables, schema.constraints).split(/;\s*\n/).filter(s => s.trim())) db.run(stmt);
+  } finally {
+    db.close();
+  }
+  seedDuchyOpera(dbPath, options);
+}
+
 async function hmacSha256Hex(secret: string, body: string): Promise<string> {
   const key = await crypto.subtle.importKey(
     "raw",
@@ -106,10 +116,11 @@ function genericShopSchema(): Schema {
       cart_order: {
         id: { type: "integer", pk: true, auto: true, required: false, unique: false, default: null, references: null },
         user_id: { type: "integer", pk: false, auto: false, required: true, unique: false, default: null, references: "user(id)" },
-        status: { type: "text", pk: false, auto: false, required: true, unique: false, default: "'checkout_pending'", references: null, constraints: { enum: ["checkout_pending", "paid", "expired", "cancelled"] } },
+        status: { type: "text", pk: false, auto: false, required: true, unique: false, default: "'checkout_pending'", references: null, constraints: { enum: ["checkout_pending", "payment_pending", "paid", "expired", "cancelled", "refund_required", "refunded"] } },
         amount_pence: { type: "integer", pk: false, auto: false, required: true, unique: false, default: null, references: null },
         currency: { type: "text", pk: false, auto: false, required: true, unique: false, default: "'GBP'", references: null },
         expires_at: { type: "text", pk: false, auto: false, required: true, unique: false, default: null, references: null },
+        payment_deadline_at: { type: "text", pk: false, auto: false, required: false, unique: false, default: null, references: null },
         payment_reference: { type: "text", pk: false, auto: false, required: false, unique: false, default: null, references: null },
         client: { type: "text", pk: false, auto: false, required: false, unique: false, default: "'web'", references: null },
       },
@@ -130,7 +141,7 @@ function genericShopSchema(): Schema {
         id: { type: "integer", pk: true, auto: true, required: false, unique: false, default: null, references: null },
         user_id: { type: "integer", pk: false, auto: false, required: true, unique: false, default: null, references: "user(id)" },
         amount_pence: { type: "integer", pk: false, auto: false, required: true, unique: false, default: null, references: null },
-        status: { type: "text", pk: false, auto: false, required: true, unique: false, default: "'pending'", references: null, constraints: { enum: ["pending", "completed", "failed"] } },
+        status: { type: "text", pk: false, auto: false, required: true, unique: false, default: "'pending'", references: null, constraints: { enum: ["pending", "authorized", "completed", "failed", "cancelled", "refund_required", "refunded"] } },
         reference: { type: "text", pk: false, auto: false, required: true, unique: true, default: null, references: null },
         client: { type: "text", pk: false, auto: false, required: false, unique: false, default: "'web'", references: null },
       },
@@ -143,7 +154,7 @@ function genericShopSchema(): Schema {
     operations: {},
     commerce: {
       enabled: true,
-      checkout: { currency: "GBP", expiryMinutes: 15, maxQuantity: 20, maxLines: 50 },
+      checkout: { currency: "GBP", expiryMinutes: 15, paymentDeadlineMinutes: 30, allowAsyncPayments: false, maxQuantity: 20, maxLines: 50 },
     },
   };
 }
@@ -157,17 +168,23 @@ describe("Duchy Opera commerce workflow", () => {
     const openapi = JSON.parse(genOpenAPI(schema));
 
     expect(services).toContain("checkoutCommerceCart");
+    expect(services).toContain("createCommercePaymentSession");
     expect(services).not.toContain("ReserveBookingInput");
     expect(routes).toContain("/commerce/checkout");
     expect(routes).toContain('path: "/commerce/catalog"');
+    expect(routes).toContain("/commerce/orders/:id/payment-session");
+    expect(routes).not.toContain("/commerce/orders/:id/payment-intent");
     expect(routes).not.toContain("/commerce/bookings/reserve");
     expect(routes).toContain('path: "/auth/context"');
     expect(routes).toContain('url.pathname.startsWith("/auth/")');
     expect(mcp).toContain("checkout_cart");
     expect(mcp).toContain("list_commerce_catalog");
+    expect(mcp).toContain("create_order_payment_session");
     expect(mcp).not.toContain("reserve_booking");
     expect(openapi.paths["/commerce/checkout"]).toBeDefined();
     expect(openapi.paths["/commerce/catalog"]).toBeDefined();
+    expect(openapi.paths["/commerce/orders/{id}/payment-session"]).toBeDefined();
+    expect(openapi.paths["/commerce/orders/{id}/payment-intent"]).toBeUndefined();
     expect(openapi.paths["/commerce/bookings/reserve"]).toBeUndefined();
     expect(openapi.paths["/auth/context"]).toBeDefined();
     expect(openapi.components.securitySchemes.bearerAuth).toMatchObject({ type: "http", scheme: "bearer" });
@@ -248,7 +265,7 @@ describe("Duchy Opera commerce workflow", () => {
     expect(apiUi).toContain("X-Certificate");
   });
 
-  test("checks out a cart, creates a payment intent, confirms paid orders, and expires stale checkouts", async () => {
+  test("checks out a cart, creates a payment session, confirms paid orders, and expires stale checkouts", async () => {
     const schema = await loadDuchyOperaSchema();
     const commerce = getEcommerceConfig(schema);
     expect(commerce?.enabled).toBe(true);
@@ -324,18 +341,20 @@ describe("Duchy Opera commerce workflow", () => {
       expect(checkedOut.amount_pence).toBe(5000);
       expect(checkedOut.status).toBe("checkout_pending");
 
-      const intent = await fetch(`${base}/commerce/orders/${checkedOut.order_id}/payment-intent`, {
+      const intent = await fetch(`${base}/commerce/orders/${checkedOut.order_id}/payment-session`, {
         method: "POST",
-        headers: { "Idempotency-Key": "intent-opera-1" },
+        headers: { "Idempotency-Key": "session-opera-1" },
       });
       expect(intent.status).toBe(201);
-      const payment = await intent.json() as { order_id: number; transaction_id: number; reference: string; amount_pence: number; provider: string };
+      const payment = await intent.json() as { order_id: number; transaction_id: number; reference: string; amount_pence: number; provider: string; status: string; payment_deadline_at: string };
       expect(payment.order_id).toBe(checkedOut.order_id);
-      expect(payment.reference).toStartWith("fake_pi_");
+      expect(payment.reference).toStartWith("fake_ps_");
       expect(payment.amount_pence).toBe(5000);
       expect(payment.provider).toBe("local");
+      expect(payment.status).toBe("payment_pending");
+      expect(Date.parse(payment.payment_deadline_at)).toBeGreaterThan(Date.now());
 
-      const webhookBody = JSON.stringify({ reference: payment.reference, status: "succeeded", provider: "fake" });
+      const webhookBody = JSON.stringify({ event_id: "evt_authorized_1", reference: payment.reference, status: "authorized", provider: "local", occurred_at: new Date().toISOString() });
       const signature = await hmacSha256Hex("test-webhook-secret", webhookBody);
       const webhook = await fetch(`${base}/commerce/payments/webhook`, {
         method: "POST",
@@ -352,6 +371,16 @@ describe("Duchy Opera commerce workflow", () => {
         status: "paid",
         idempotent: false,
       });
+      const duplicateWebhook = await fetch(`${base}/commerce/payments/webhook`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "X-OpenB2C-Signature": `sha256=${signature}`,
+        },
+        body: webhookBody,
+      });
+      expect(duplicateWebhook.status).toBe(200);
+      expect(await duplicateWebhook.json()).toMatchObject({ status: "paid", idempotent: true });
       expect(receiptEmails).toHaveLength(1);
       expect(receiptEmails[0]).toMatchObject({
         channel: "email",
@@ -441,6 +470,8 @@ describe("Duchy Opera commerce workflow", () => {
       });
       expect(first.status).toBe(201);
       const firstOrder = await first.json() as { order_id: number };
+      const firstSession = await fetch(`${base}/commerce/orders/${firstOrder.order_id}/payment-session`, { method: "POST" });
+      expect(firstSession.status).toBe(201);
 
       const oversell = await fetch(`${base}/commerce/checkout`, {
         method: "POST",
@@ -470,6 +501,27 @@ describe("Duchy Opera commerce workflow", () => {
         db.close();
       }
 
+      const stillLocked = await fetch(`${base}/commerce/checkout`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          user_id: 1,
+          items: [{ item_id: 1, quantity: 1, options: { ticket_type: "standard" } }],
+        }),
+      });
+      expect(stillLocked.status).toBe(409);
+
+      const deadlineDb = new Database(dbPath);
+      try {
+        deadlineDb.query("UPDATE booking SET payment_deadline_at = ? WHERE id = ?").run(new Date(Date.now() - 60000).toISOString(), firstOrder.order_id);
+      } finally {
+        deadlineDb.close();
+      }
+
+      const expire = await fetch(`${base}/commerce/orders/expire`, { method: "POST" });
+      expect(expire.status).toBe(200);
+      expect(await expire.json()).toEqual({ expired: 1 });
+
       const afterExpiry = await fetch(`${base}/commerce/checkout`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -485,40 +537,132 @@ describe("Duchy Opera commerce workflow", () => {
     }
   });
 
-  test("creates Stripe payment intents with idempotent provider handoff", async () => {
+  test("late authorized payment cancels when capacity has gone", async () => {
     const schema = await loadDuchyOperaSchema();
     const dir = writeGenerated(schema);
-    const dbPath = join(dir, "duchy-stripe-commerce.sqlite");
-    const stripeRequests: Array<{ method: string; path: string; headers: Record<string, string>; body: string }> = [];
-    const stripe = Bun.serve({
-      port: 0,
-      async fetch(req) {
-        const url = new URL(req.url);
-        const body = await req.text();
-        stripeRequests.push({
-          method: req.method,
-          path: url.pathname,
-          headers: Object.fromEntries(req.headers),
-          body,
-        });
-        if (req.method === "POST" && url.pathname === "/v1/payment_intents") {
-          return Response.json({ id: "pi_openb2c_stripe", client_secret: "pi_openb2c_stripe_secret_123" });
-        }
-        if (req.method === "GET" && url.pathname === "/v1/payment_intents/pi_openb2c_stripe") {
-          return Response.json({ id: "pi_openb2c_stripe", client_secret: "pi_openb2c_stripe_secret_123" });
-        }
-        return Response.json({ error: "not found" }, { status: 404 });
-      },
-    });
+    const services = await import(`${pathToFileURL(join(dir, "services.ts")).href}?late-auth=${Date.now()}`);
+    const dbPath = join(dir, "duchy-late-auth.sqlite");
+    applyDuchySchema(schema, dbPath, { venueCapacity: 2 });
+    const db = new Database(dbPath);
+    const auth = { userId: null, scopes: ["*"] };
+    process.env.PAYMENT_PROVIDER = "fake";
+
+    try {
+      const first = services.checkoutCommerceCart(db, {
+        user_id: 1,
+        items: [{ item_id: 1, quantity: 2 }],
+      }, auth);
+      expect(first.ok).toBe(true);
+      const session = await services.createCommercePaymentSession(db, first.data.order_id, auth);
+      expect(session.ok).toBe(true);
+
+      db.query("UPDATE booking SET payment_deadline_at = ? WHERE id = ?").run(new Date(Date.now() - 60000).toISOString(), first.data.order_id);
+      expect(services.expireCommerceOrders(db).data.expired).toBe(1);
+
+      const second = services.checkoutCommerceCart(db, {
+        user_id: 1,
+        items: [{ item_id: 1, quantity: 2 }],
+      }, auth);
+      expect(second.ok).toBe(true);
+
+      const late = await services.handleCommercePaymentWebhook(db, {
+        event_id: "evt_late_authorized",
+        reference: session.data.reference,
+        status: "authorized",
+        provider: "fake",
+        occurred_at: new Date(Date.now() - 120000).toISOString(),
+      });
+      expect(late.ok).toBe(true);
+      expect(late.data.status).toBe("cancelled");
+      expect(late.data.idempotent).toBe(false);
+
+      const booking = db.query<{ status: string }, []>("SELECT status FROM booking WHERE id = ?").get(first.data.order_id);
+      const transaction = db.query<{ status: string }, []>("SELECT status FROM [transaction] WHERE id = ?").get(session.data.transaction_id);
+      expect(booking?.status).toBe("cancelled");
+      expect(transaction?.status).toBe("cancelled");
+    } finally {
+      db.close();
+      delete process.env.PAYMENT_PROVIDER;
+    }
+  });
+
+  test("late captured payment becomes refund-required then refunded when capacity has gone", async () => {
+    const schema = await loadDuchyOperaSchema();
+    const dir = writeGenerated(schema);
+    const services = await import(`${pathToFileURL(join(dir, "services.ts")).href}?late-captured=${Date.now()}`);
+    const dbPath = join(dir, "duchy-late-captured.sqlite");
+    applyDuchySchema(schema, dbPath, { venueCapacity: 2 });
+    const db = new Database(dbPath);
+    const auth = { userId: null, scopes: ["*"] };
+    process.env.PAYMENT_PROVIDER = "fake";
+
+    try {
+      const first = services.checkoutCommerceCart(db, {
+        user_id: 1,
+        items: [{ item_id: 1, quantity: 2 }],
+      }, auth);
+      expect(first.ok).toBe(true);
+      const session = await services.createCommercePaymentSession(db, first.data.order_id, auth);
+      expect(session.ok).toBe(true);
+
+      db.query("UPDATE booking SET payment_deadline_at = ? WHERE id = ?").run(new Date(Date.now() - 60000).toISOString(), first.data.order_id);
+      expect(services.expireCommerceOrders(db).data.expired).toBe(1);
+
+      const second = services.checkoutCommerceCart(db, {
+        user_id: 1,
+        items: [{ item_id: 1, quantity: 2 }],
+      }, auth);
+      expect(second.ok).toBe(true);
+
+      const captured = await services.handleCommercePaymentWebhook(db, {
+        event_id: "evt_late_captured",
+        reference: session.data.reference,
+        status: "captured",
+        provider: "fake",
+        occurred_at: new Date(Date.now() - 120000).toISOString(),
+      });
+      expect(captured.ok).toBe(true);
+      expect(captured.data.status).toBe("refund_required");
+
+      const duplicate = await services.handleCommercePaymentWebhook(db, {
+        event_id: "evt_late_captured",
+        reference: session.data.reference,
+        status: "captured",
+        provider: "fake",
+      });
+      expect(duplicate.ok).toBe(true);
+      expect(duplicate.data).toMatchObject({ status: "refund_required", idempotent: true });
+
+      const refunded = await services.handleCommercePaymentWebhook(db, {
+        event_id: "evt_late_refunded",
+        reference: session.data.reference,
+        status: "refunded",
+        provider: "fake",
+      });
+      expect(refunded.ok).toBe(true);
+      expect(refunded.data.status).toBe("refunded");
+
+      const booking = db.query<{ status: string }, []>("SELECT status FROM booking WHERE id = ?").get(first.data.order_id);
+      const transaction = db.query<{ status: string }, []>("SELECT status FROM [transaction] WHERE id = ?").get(session.data.transaction_id);
+      expect(booking?.status).toBe("refunded");
+      expect(transaction?.status).toBe("refunded");
+    } finally {
+      db.close();
+      delete process.env.PAYMENT_PROVIDER;
+    }
+  });
+
+  test("non-local payment providers are explicit adapter work", async () => {
+    const schema = await loadDuchyOperaSchema();
+    const dir = writeGenerated(schema);
+    const dbPath = join(dir, "duchy-provider-contract.sqlite");
 
     process.env.DB_PATH = dbPath;
     process.env.PORT = "0";
     process.env.AUTH_ENABLED = "false";
     process.env.PAYMENT_PROVIDER = "stripe";
-    process.env.PAYMENT_API_KEY = "sk_test_openb2c";
-    process.env.STRIPE_API_BASE = `http://127.0.0.1:${stripe.port}`;
 
-    const { server } = await import(`${pathToFileURL(join(dir, "server.ts")).href}?stripe=${Date.now()}`);
+    const { server } = await import(`${pathToFileURL(join(dir, "server.ts")).href}?provider-contract=${Date.now()}`);
     const base = `http://127.0.0.1:${server.port}`;
     seedDuchyOpera(dbPath);
 
@@ -535,48 +679,19 @@ describe("Duchy Opera commerce workflow", () => {
       expect(checkout.status).toBe(201);
       const checkedOut = await checkout.json() as { order_id: number; amount_pence: number };
 
-      const intent = await fetch(`${base}/commerce/orders/${checkedOut.order_id}/payment-intent`, { method: "POST" });
-      expect(intent.status).toBe(201);
-      const payment = await intent.json() as { order_id: number; reference: string; amount_pence: number; currency: string; client_secret: string; provider: string };
-      expect(payment).toMatchObject({
-        order_id: checkedOut.order_id,
-        reference: "pi_openb2c_stripe",
-        amount_pence: 2500,
-        currency: "GBP",
-        client_secret: "pi_openb2c_stripe_secret_123",
-        provider: "stripe",
+      const session = await fetch(`${base}/commerce/orders/${checkedOut.order_id}/payment-session`, { method: "POST" });
+      expect(session.status).toBe(500);
+      expect(await session.json()).toMatchObject({
+        error: "unsupported PAYMENT_PROVIDER adapter stripe",
+        code: "internal_error",
       });
-
-      const createRequest = stripeRequests[0];
-      expect(createRequest.method).toBe("POST");
-      expect(createRequest.path).toBe("/v1/payment_intents");
-      expect(createRequest.headers.authorization).toBe("Bearer sk_test_openb2c");
-      expect(createRequest.headers["idempotency-key"]).toBe(`openb2c-commerce-order-${checkedOut.order_id}`);
-      const createBody = new URLSearchParams(createRequest.body);
-      expect(createBody.get("amount")).toBe("2500");
-      expect(createBody.get("currency")).toBe("gbp");
-      expect(createBody.get("automatic_payment_methods[enabled]")).toBe("true");
-      expect(createBody.get("metadata[openb2c_order_id]")).toBe(String(checkedOut.order_id));
-
-      const repeated = await fetch(`${base}/commerce/orders/${checkedOut.order_id}/payment-intent`, { method: "POST" });
-      expect(repeated.status).toBe(201);
-      expect(await repeated.json()).toMatchObject({
-        reference: "pi_openb2c_stripe",
-        client_secret: "pi_openb2c_stripe_secret_123",
-        provider: "stripe",
-      });
-      expect(stripeRequests.map(request => `${request.method} ${request.path}`)).toEqual([
-        "POST /v1/payment_intents",
-        "GET /v1/payment_intents/pi_openb2c_stripe",
-      ]);
     } finally {
       server.stop(true);
-      stripe.stop(true);
       clearEnv();
     }
   });
 
-  test("commerce payment intents support the fake provider for local development", async () => {
+  test("commerce payment sessions support the fake provider for local development", async () => {
     const schema = await loadDuchyOperaSchema();
     const dir = writeGenerated(schema);
     const services = await import(pathToFileURL(join(dir, "services.ts")).href);
@@ -598,12 +713,13 @@ describe("Duchy Opera commerce workflow", () => {
       }, auth);
       expect(checkout.ok).toBe(true);
 
-      const intent = await services.createCommercePaymentIntent(db, checkout.data.order_id, auth);
+      const intent = await services.createCommercePaymentSession(db, checkout.data.order_id, auth);
       expect(intent.ok).toBe(true);
       expect(intent.data.provider).toBe("fake");
-      expect(intent.data.reference).toStartWith("fake_pi_");
+      expect(intent.data.reference).toStartWith("fake_ps_");
+      expect(intent.data.status).toBe("payment_pending");
 
-      const repeated = await services.createCommercePaymentIntent(db, checkout.data.order_id, auth);
+      const repeated = await services.createCommercePaymentSession(db, checkout.data.order_id, auth);
       expect(repeated.ok).toBe(true);
       expect(repeated.data).toMatchObject({
         provider: "fake",

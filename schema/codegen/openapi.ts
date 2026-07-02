@@ -1036,7 +1036,7 @@ export function genOpenAPI(schema: Schema): string {
         status: { type: "string" },
       },
     };
-    schemas.CommercePaymentIntentResult = {
+    schemas.CommercePaymentSessionResult = {
       type: "object",
       properties: {
         order_id: { type: "integer" },
@@ -1046,6 +1046,8 @@ export function genOpenAPI(schema: Schema): string {
         currency: { type: "string" },
         client_secret: { type: "string" },
         provider: { type: "string" },
+        status: { type: "string" },
+        payment_deadline_at: { type: "string", format: "date-time" },
       },
     };
     paths["/commerce/checkout"] = {
@@ -1070,12 +1072,12 @@ export function genOpenAPI(schema: Schema): string {
         },
       },
     };
-    paths["/commerce/orders/{id}/payment-intent"] = {
+    paths["/commerce/orders/{id}/payment-session"] = {
       post: withAuth({
-        summary: "Create a payment intent for a commerce order",
+        summary: "Create a payment session for a commerce order",
         parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
         responses: {
-          "201": { description: "Payment intent", content: { "application/json": { schema: { $ref: "#/components/schemas/CommercePaymentIntentResult" } } } },
+          "201": { description: "Payment session", content: { "application/json": { schema: { $ref: "#/components/schemas/CommercePaymentSessionResult" } } } },
           "409": { description: "Operation failed", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       }),
@@ -1093,11 +1095,13 @@ export function genOpenAPI(schema: Schema): string {
     schemas.PaymentWebhookInput = {
       type: "object",
       properties: {
+        event_id: { type: "string" },
         reference: { type: "string" },
-        status: { type: "string", enum: ["succeeded", "failed"] },
+        status: { type: "string", enum: ["authorized", "captured", "failed", "cancelled", "refunded"] },
         provider: { type: "string" },
+        occurred_at: { type: "string", format: "date-time" },
       },
-      required: ["reference", "status"],
+      required: ["event_id", "reference", "status"],
     };
     paths["/commerce/payments/webhook"] = {
       post: withWebhookSignature({
@@ -1145,7 +1149,7 @@ export function genOpenAPI(schema: Schema): string {
         status: { type: "string" },
       },
     };
-    schemas.PaymentIntentResult = {
+    schemas.PaymentSessionResult = {
       type: "object",
       properties: {
         booking_id: { type: "integer" },
@@ -1155,6 +1159,8 @@ export function genOpenAPI(schema: Schema): string {
         currency: { type: "string" },
         client_secret: { type: "string" },
         provider: { type: "string" },
+        status: { type: "string" },
+        payment_deadline_at: { type: "string", format: "date-time" },
       },
     };
     paths["/commerce/bookings/reserve"] = {
@@ -1170,12 +1176,12 @@ export function genOpenAPI(schema: Schema): string {
         },
       }),
     };
-    paths["/commerce/bookings/{id}/payment-intent"] = {
+    paths["/commerce/bookings/{id}/payment-session"] = {
       post: withAuth({
-        summary: "Create a payment intent for a booking (compatibility alias)",
+        summary: "Create a payment session for a booking (compatibility alias)",
         parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
         responses: {
-          "201": { description: "Payment intent", content: { "application/json": { schema: { $ref: "#/components/schemas/PaymentIntentResult" } } } },
+          "201": { description: "Payment session", content: { "application/json": { schema: { $ref: "#/components/schemas/PaymentSessionResult" } } } },
           "409": { description: "Operation failed", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       }),

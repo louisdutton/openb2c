@@ -50,7 +50,7 @@ Foreign keys are the primary structural signal. OpenB2C treats the schema as a g
 Duchy Opera is the first acceptance case:
 
 - public performances and ticket checkout
-- payment intent and payment webhook flow
+- payment session and payment webhook flow
 - customer-owned bookings and tickets
 - private production scheduling
 - rehearsals, calls, requirement coverage, and materials

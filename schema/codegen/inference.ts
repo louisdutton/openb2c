@@ -81,13 +81,13 @@ export function inferCommerce(schema: Schema): CommerceInference {
     "commerce.inference.order",
     diagnostics,
     Object.keys(schema.tables).filter((entity) => isOrder(schema, entity)),
-    "expected exactly one table with a user FK, checkout_pending/paid/expired/cancelled status enum, amount_pence, currency, expires_at, and payment_reference",
+    "expected exactly one table with a user FK, checkout_pending/payment_pending/paid/expired/cancelled/refund_required/refunded status enum, amount_pence, currency, expires_at, payment_deadline_at, and payment_reference",
   );
   const transaction = chooseOne(
     "commerce.inference.transaction",
     diagnostics,
     Object.keys(schema.tables).filter((entity) => isTransaction(schema, entity)),
-    "expected exactly one table with a user FK, pending/completed/failed status enum, money amount, and reference/payment_reference field",
+    "expected exactly one table with a user FK, pending/authorized/completed/failed/cancelled/refund_required/refunded status enum, money amount, and reference/payment_reference field",
   );
   const lineItem = chooseOne(
     "commerce.inference.lineItem",
@@ -125,16 +125,17 @@ export function inferCommerce(schema: Schema): CommerceInference {
 
   const catalogPrice = moneyField(schema, catalog, ["price_pence"]);
   const orderUser = fkTo(schema, order, "user");
-  const orderStatus = enumField(schema, order, ["checkout_pending", "paid", "expired", "cancelled"]);
+  const orderStatus = enumField(schema, order, ["checkout_pending", "payment_pending", "paid", "expired", "cancelled", "refund_required", "refunded"]);
   const orderAmount = moneyField(schema, order, ["amount_pence"]);
   const orderCurrency = fieldNamed(schema, order, ["currency"]);
   const orderExpiresAt = fieldNamed(schema, order, ["expires_at"]);
+  const orderPaymentDeadlineAt = fieldNamed(schema, order, ["payment_deadline_at"]);
   const orderPaymentReference = fieldNamed(schema, order, ["payment_reference"]);
   const lineStatus = enumField(schema, lineItem, ["reserved", "cancelled"]);
   const linePrice = moneyField(schema, lineItem, ["price_pence"]);
   const txUser = fkTo(schema, transaction, "user");
   const txAmount = moneyField(schema, transaction, ["amount_pence"]);
-  const txStatus = enumField(schema, transaction, ["pending", "completed", "failed"]);
+  const txStatus = enumField(schema, transaction, ["pending", "authorized", "completed", "failed", "cancelled", "refund_required", "refunded"]);
   const txReference = fieldNamed(schema, transaction, ["reference", "payment_reference"]);
 
   requiredRef(diagnostics, "commerce.inference.catalog.price", catalogPrice);
@@ -143,6 +144,7 @@ export function inferCommerce(schema: Schema): CommerceInference {
   requiredRef(diagnostics, "commerce.inference.order.amount", orderAmount);
   requiredRef(diagnostics, "commerce.inference.order.currency", orderCurrency);
   requiredRef(diagnostics, "commerce.inference.order.expiresAt", orderExpiresAt);
+  requiredRef(diagnostics, "commerce.inference.order.paymentDeadlineAt", orderPaymentDeadlineAt);
   requiredRef(diagnostics, "commerce.inference.order.paymentReference", orderPaymentReference);
   requiredRef(diagnostics, "commerce.inference.lineItem.status", lineStatus);
   requiredRef(diagnostics, "commerce.inference.lineItem.price", linePrice);
@@ -176,12 +178,16 @@ export function inferCommerce(schema: Schema): CommerceInference {
         amount: orderAmount,
         currency: orderCurrency,
         expiresAt: orderExpiresAt,
+        paymentDeadlineAt: orderPaymentDeadlineAt,
         paymentReference: orderPaymentReference,
         client: fieldNamed(schema, order, ["client"]),
         pendingStatus: "checkout_pending",
+        paymentPendingStatus: "payment_pending",
         paidStatus: "paid",
         expiredStatus: "expired",
         cancelledStatus: "cancelled",
+        refundRequiredStatus: "refund_required",
+        refundedStatus: "refunded",
       },
       lineItem: {
         entity: lineItem,
@@ -210,8 +216,12 @@ export function inferCommerce(schema: Schema): CommerceInference {
         client: fieldNamed(schema, transaction, ["client"]),
         purchaseType: enumValues(schema.tables[transaction][fieldNamed(schema, transaction, ["type"])?.field || ""] || {}).includes("purchase") ? "purchase" : "purchase",
         pendingStatus: "pending",
+        authorizedStatus: "authorized",
         completedStatus: txEnums.includes("completed") ? "completed" : "paid",
         failedStatus: "failed",
+        cancelledStatus: "cancelled",
+        refundRequiredStatus: "refund_required",
+        refundedStatus: "refunded",
       },
       transactionLine: {
         entity: transactionLine,
@@ -221,6 +231,8 @@ export function inferCommerce(schema: Schema): CommerceInference {
       checkout: {
         currency: schema.commerce.checkout?.currency || "GBP",
         expiryMinutes: schema.commerce.checkout?.expiryMinutes ?? 15,
+        paymentDeadlineMinutes: schema.commerce.checkout?.paymentDeadlineMinutes ?? 30,
+        allowAsyncPayments: schema.commerce.checkout?.allowAsyncPayments ?? false,
         maxQuantity: schema.commerce.checkout?.maxQuantity ?? 20,
         maxLines: schema.commerce.checkout?.maxLines ?? 50,
       },
@@ -254,10 +266,11 @@ function requiredRef(diagnostics: InferenceDiagnostic[], path: string, ref: Fiel
 function isOrder(schema: Schema, entity: string): boolean {
   return Boolean(
     fkTo(schema, entity, "user") &&
-    enumField(schema, entity, ["checkout_pending", "paid", "expired", "cancelled"]) &&
+    enumField(schema, entity, ["checkout_pending", "payment_pending", "paid", "expired", "cancelled", "refund_required", "refunded"]) &&
     moneyField(schema, entity, ["amount_pence"]) &&
     fieldNamed(schema, entity, ["currency"]) &&
     fieldNamed(schema, entity, ["expires_at"]) &&
+    fieldNamed(schema, entity, ["payment_deadline_at"]) &&
     fieldNamed(schema, entity, ["payment_reference"]),
   );
 }
@@ -265,7 +278,7 @@ function isOrder(schema: Schema, entity: string): boolean {
 function isTransaction(schema: Schema, entity: string): boolean {
   return Boolean(
     fkTo(schema, entity, "user") &&
-    enumField(schema, entity, ["pending", "completed", "failed"]) &&
+    enumField(schema, entity, ["pending", "authorized", "completed", "failed", "cancelled", "refund_required", "refunded"]) &&
     moneyField(schema, entity, ["amount_pence"]) &&
     fieldNamed(schema, entity, ["reference", "payment_reference"]),
   );

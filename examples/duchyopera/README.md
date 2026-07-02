@@ -7,7 +7,7 @@ It proves that public commerce and private operations can be generated from reus
 ## Scope
 
 - Public performances and ticket checkout.
-- Booking, ticket, transaction, and payment intent flow.
+- Booking, ticket, transaction, and payment session flow.
 - Private production scheduling.
 - Rehearsals, calls, requirement coverage, and materials.
 - Artist profiles as one-to-one extensions of users.
@@ -25,6 +25,8 @@ commerce = {
   checkout = {
     currency = "GBP";
     expiryMinutes = 15;
+    paymentDeadlineMinutes = 30;
+    allowAsyncPayments = false;
     maxQuantity = 20;
     maxLines = 50;
   };
@@ -55,8 +57,8 @@ Fresh local databases apply reference venue data and demo fixtures by default. S
 ## Checkout Flow
 
 1. `POST /commerce/checkout` creates a pending order from a cart.
-2. `POST /commerce/orders/{id}/payment-intent` creates or retrieves an idempotent provider payment intent.
-3. `POST /commerce/payments/webhook` receives a signed provider callback and confirms line items when payment succeeds.
-4. `POST /commerce/orders/expire` cancels unpaid reservations after their expiry window.
+2. `POST /commerce/orders/{id}/payment-session` creates or retrieves an idempotent provider payment session and starts the bounded payment lock.
+3. `POST /commerce/payments/webhook` receives signed provider callbacks for authorized, captured, failed, cancelled, and refunded events.
+4. `POST /commerce/orders/expire` cancels unpaid reservations after their checkout or payment deadline window.
 
-Use `PAYMENT_PROVIDER=fake` or `local` for development. Use `PAYMENT_PROVIDER=stripe` with `PAYMENT_API_KEY` and `PAYMENT_WEBHOOK_SECRET` for production-like Stripe flows.
+Use `PAYMENT_PROVIDER=fake` or `local` for development. Production provider adapters such as Stripe or Adyen are added after this provider-neutral contract.

@@ -106,20 +106,20 @@ describe("generated configuration", () => {
     expect(required).toContain("DB_PATH");
     expect(required).toContain("CORS_ORIGINS");
     expect(required).toContain("EMAIL_WEBHOOK_URL");
-    expect(required).toContain("PAYMENT_PROVIDER");
-    expect(required).toContain("PAYMENT_API_KEY");
+    expect(required).not.toContain("PAYMENT_PROVIDER");
+    expect(required).not.toContain("PAYMENT_API_KEY");
     expect(required).toContain("WEBHOOK_URL");
     expect(required).toContain("WEBHOOK_SIGNING_SECRET");
 
-    const paymentKey = envVarSpecs(schema).find(spec => spec.name === "PAYMENT_API_KEY");
-    expect(paymentKey?.secret).toBe(true);
+    const paymentProvider = envVarSpecs(schema).find(spec => spec.name === "PAYMENT_PROVIDER");
+    expect(paymentProvider?.requiredInProduction).toBe(false);
     const webhookSecret = envVarSpecs(schema).find(spec => spec.name === "WEBHOOK_SIGNING_SECRET");
     expect(webhookSecret?.secret).toBe(true);
   });
 
   test("env examples include keys without embedding secret values", () => {
     const example = genEnvExample(schema);
-    expect(example).toContain("PAYMENT_API_KEY=");
+    expect(example).toContain("PAYMENT_PROVIDER=local");
     expect(example).toContain("REGISTRY_PRIVATE_KEY=");
     expect(example).toContain("EMAIL_WEBHOOK_URL=");
     expect(example).toContain("WEBHOOK_SIGNING_SECRET=");

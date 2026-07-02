@@ -24,7 +24,15 @@ in
     status = {
       type = "text";
       default = "'pending'";
-      constraints.enum = [ "pending" "completed" "failed" "refunded" ];
+      constraints.enum = [
+        "pending"
+        "authorized"
+        "completed"
+        "failed"
+        "cancelled"
+        "refund_required"
+        "refunded"
+      ];
     };
     reference = { type = "text"; };  # External payment reference
     client = { type = "text"; default = "'web'"; };  # web, mcp, api
@@ -106,10 +114,12 @@ in
       };
       transitions = [{
         field = F.status;
-        from = [ V.status.pending ];
+        from = with V.status; [ pending authorized ];
         to = V.status.completed;
       }];
-      guard = E.eq (E.f F.status) (E.lit V.status.pending);
+      guard = E.or
+        (E.eq (E.f F.status) (E.lit V.status.pending))
+        (E.eq (E.f F.status) (E.lit V.status.authorized));
       set.status.value = V.status.completed;
       cascade = [{
         entity = config.entityRefs.ticket;
@@ -140,10 +150,12 @@ in
       };
       transitions = [{
         field = F.status;
-        from = [ V.status.pending ];
+        from = with V.status; [ pending authorized ];
         to = V.status.failed;
       }];
-      guard = E.eq (E.f F.status) (E.lit V.status.pending);
+      guard = E.or
+        (E.eq (E.f F.status) (E.lit V.status.pending))
+        (E.eq (E.f F.status) (E.lit V.status.authorized));
       set.status.value = V.status.failed;
       cascade = [{
         entity = config.entityRefs.ticket;

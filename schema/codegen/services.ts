@@ -64,12 +64,16 @@ function normalizeEcommerceConfig(ecommerce: InferredCommerceConfig): Record<str
       amount: requireEcommerceField("order.amount", ecommerce.order.amount),
       currency: requireEcommerceField("order.currency", ecommerce.order.currency),
       expiresAt: requireEcommerceField("order.expiresAt", ecommerce.order.expiresAt),
+      paymentDeadlineAt: requireEcommerceField("order.paymentDeadlineAt", ecommerce.order.paymentDeadlineAt),
       paymentReference: requireEcommerceField("order.paymentReference", ecommerce.order.paymentReference),
       client: ecommerce.order.client,
       pendingStatus: ecommerce.order.pendingStatus,
+      paymentPendingStatus: ecommerce.order.paymentPendingStatus,
       paidStatus: ecommerce.order.paidStatus,
       expiredStatus: ecommerce.order.expiredStatus,
       cancelledStatus: ecommerce.order.cancelledStatus,
+      refundRequiredStatus: ecommerce.order.refundRequiredStatus,
+      refundedStatus: ecommerce.order.refundedStatus,
     },
     lineItem: {
       entity: lineItemEntity,
@@ -101,8 +105,12 @@ function normalizeEcommerceConfig(ecommerce: InferredCommerceConfig): Record<str
       client: ecommerce.transaction.client,
       purchaseType: ecommerce.transaction.purchaseType,
       pendingStatus: ecommerce.transaction.pendingStatus,
+      authorizedStatus: ecommerce.transaction.authorizedStatus,
       completedStatus: ecommerce.transaction.completedStatus,
       failedStatus: ecommerce.transaction.failedStatus,
+      cancelledStatus: ecommerce.transaction.cancelledStatus,
+      refundRequiredStatus: ecommerce.transaction.refundRequiredStatus,
+      refundedStatus: ecommerce.transaction.refundedStatus,
     },
     transactionLine: {
       entity: transactionLineEntity,
@@ -1557,7 +1565,7 @@ export interface CommerceCatalogResult {
   lookups: Record<string, Record<string, string>>;
 }
 
-export interface CommercePaymentIntentResult {
+export interface CommercePaymentSessionResult {
   order_id: number;
   transaction_id: number;
   reference: string;
@@ -1565,6 +1573,8 @@ export interface CommercePaymentIntentResult {
   currency: string;
   client_secret: string;
   provider: string;
+  status: string;
+  payment_deadline_at: string;
 }
 
 ${includeLegacyAliases ? `
@@ -1591,7 +1601,7 @@ export interface ReserveBookingResult {
   status: string;
 }
 
-export interface PaymentIntentResult {
+export interface PaymentSessionResult {
   booking_id: number;
   transaction_id: number;
   reference: string;
@@ -1599,13 +1609,17 @@ export interface PaymentIntentResult {
   currency: string;
   client_secret: string;
   provider: string;
+  status: string;
+  payment_deadline_at: string;
 }
 ` : ""}
 
 export interface PaymentWebhookInput {
+  event_id: string;
   reference: string;
-  status: "succeeded" | "failed";
+  status: "authorized" | "captured" | "failed" | "cancelled" | "refunded";
   provider?: string;
+  occurred_at?: string;
 }
 
 export interface PaymentWebhookResult {
@@ -1621,106 +1635,81 @@ class CommerceCheckoutError extends Error {
   }
 }
 
-interface ProviderPaymentIntent {
+function ensurePaymentEventTable(db: Database): void {
+  db.run(\`
+    CREATE TABLE IF NOT EXISTS openb2c_payment_event (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      provider TEXT NOT NULL,
+      event_id TEXT NOT NULL,
+      reference TEXT NOT NULL,
+      status TEXT NOT NULL,
+      occurred_at TEXT,
+      order_id INTEGER,
+      transaction_id INTEGER,
+      result_status TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(provider, event_id)
+    )
+  \`);
+  db.run("CREATE INDEX IF NOT EXISTS openb2c_payment_event_reference ON openb2c_payment_event (reference, created_at)");
+}
+
+interface ProviderPaymentSession {
   provider: string;
   reference: string;
   client_secret: string;
+  status: "pending" | "authorized" | "captured" | "cancelled" | "refunded";
 }
 
 function paymentProvider(): string {
   return (process.env.PAYMENT_PROVIDER || "local").trim().toLowerCase();
 }
 
-function stripeApiBase(): string {
-  return (process.env.STRIPE_API_BASE || "https://api.stripe.com").replace(/\\/+$/, "");
+function unsupportedPaymentProvider(provider: string): Result<ProviderPaymentSession> {
+  return { ok: false, error: "unsupported PAYMENT_PROVIDER adapter " + provider, code: "internal_error" };
 }
 
-function stripeApiKey(): string {
-  return process.env.STRIPE_SECRET_KEY || process.env.PAYMENT_API_KEY || "";
+function localPaymentSession(reference?: string, provider = "local", status: ProviderPaymentSession["status"] = "pending"): Result<ProviderPaymentSession> {
+  const id = reference || ("fake_ps_" + crypto.randomUUID());
+  return { ok: true, data: { provider, reference: id, client_secret: id + "_secret", status } };
 }
 
-function stripeError(status: number, message: string): Result<ProviderPaymentIntent> {
-  return {
-    ok: false,
-    error: "Stripe payment intent request failed with status " + status,
-    code: "internal_error",
-    details: { provider: "stripe", status: String(status), message },
-  };
-}
-
-function parseStripeJson(body: string): Record<string, unknown> {
-  try {
-    return body ? JSON.parse(body) as Record<string, unknown> : {};
-  } catch {
-    return {};
-  }
-}
-
-function localPaymentIntent(reference?: string, provider = "local"): Result<ProviderPaymentIntent> {
-  const id = reference || ("fake_pi_" + crypto.randomUUID());
-  return { ok: true, data: { provider, reference: id, client_secret: id + "_secret" } };
-}
-
-async function createStripePaymentIntent(orderId: number, amount: number, currency: string): Promise<Result<ProviderPaymentIntent>> {
-  const key = stripeApiKey();
-  if (!key) return { ok: false, error: "PAYMENT_API_KEY is required for Stripe payment intents", code: "internal_error" };
-
-  const body = new URLSearchParams();
-  body.set("amount", String(amount));
-  body.set("currency", currency.toLowerCase());
-  body.set("automatic_payment_methods[enabled]", "true");
-  body.set("metadata[openb2c_order_id]", String(orderId));
-
-  const res = await fetch(stripeApiBase() + "/v1/payment_intents", {
-    method: "POST",
-    headers: {
-      "authorization": "Bearer " + key,
-      "content-type": "application/x-www-form-urlencoded",
-      "idempotency-key": "openb2c-commerce-order-" + orderId,
-    },
-    body,
-  });
-  const text = await res.text();
-  if (!res.ok) return stripeError(res.status, text);
-
-  const payload = parseStripeJson(text);
-  if (typeof payload.id !== "string" || typeof payload.client_secret !== "string") {
-    return { ok: false, error: "Stripe payment intent response was missing id or client_secret", code: "internal_error" };
-  }
-  return { ok: true, data: { provider: "stripe", reference: payload.id, client_secret: payload.client_secret } };
-}
-
-async function retrieveStripePaymentIntent(reference: string): Promise<Result<ProviderPaymentIntent>> {
-  const key = stripeApiKey();
-  if (!key) return { ok: false, error: "PAYMENT_API_KEY is required for Stripe payment intents", code: "internal_error" };
-
-  const res = await fetch(stripeApiBase() + "/v1/payment_intents/" + encodeURIComponent(reference), {
-    headers: { "authorization": "Bearer " + key },
-  });
-  const text = await res.text();
-  if (!res.ok) return stripeError(res.status, text);
-
-  const payload = parseStripeJson(text);
-  if (typeof payload.id !== "string" || typeof payload.client_secret !== "string") {
-    return { ok: false, error: "Stripe payment intent response was missing id or client_secret", code: "internal_error" };
-  }
-  return { ok: true, data: { provider: "stripe", reference: payload.id, client_secret: payload.client_secret } };
-}
-
-async function createProviderPaymentIntent(orderId: number, amount: number, currency: string): Promise<Result<ProviderPaymentIntent>> {
+async function createProviderPaymentSession(orderId: number, amount: number, currency: string): Promise<Result<ProviderPaymentSession>> {
   const provider = paymentProvider();
-  if (provider === "local") return localPaymentIntent();
-  if (provider === "fake") return localPaymentIntent(undefined, "fake");
-  if (provider === "stripe") return createStripePaymentIntent(orderId, amount, currency);
-  return { ok: false, error: "unsupported PAYMENT_PROVIDER " + provider, code: "internal_error" };
+  void orderId;
+  void amount;
+  void currency;
+  if (provider === "local") return localPaymentSession();
+  if (provider === "fake") return localPaymentSession(undefined, "fake");
+  return unsupportedPaymentProvider(provider);
 }
 
-async function retrieveProviderPaymentIntent(reference: string): Promise<Result<ProviderPaymentIntent>> {
+async function retrieveProviderPaymentSession(reference: string): Promise<Result<ProviderPaymentSession>> {
   const provider = paymentProvider();
-  if (provider === "local") return localPaymentIntent(reference);
-  if (provider === "fake") return localPaymentIntent(reference, "fake");
-  if (provider === "stripe") return retrieveStripePaymentIntent(reference);
-  return { ok: false, error: "unsupported PAYMENT_PROVIDER " + provider, code: "internal_error" };
+  if (provider === "local") return localPaymentSession(reference);
+  if (provider === "fake") return localPaymentSession(reference, "fake");
+  return unsupportedPaymentProvider(provider);
+}
+
+async function captureProviderPaymentSession(reference: string): Promise<Result<ProviderPaymentSession>> {
+  const provider = paymentProvider();
+  if (provider === "local") return localPaymentSession(reference, provider, "captured");
+  if (provider === "fake") return localPaymentSession(reference, provider, "captured");
+  return unsupportedPaymentProvider(provider);
+}
+
+async function cancelProviderPaymentSession(reference: string): Promise<Result<ProviderPaymentSession>> {
+  const provider = paymentProvider();
+  if (provider === "local") return localPaymentSession(reference, provider, "cancelled");
+  if (provider === "fake") return localPaymentSession(reference, provider, "cancelled");
+  return unsupportedPaymentProvider(provider);
+}
+
+async function refundProviderPaymentSession(reference: string): Promise<Result<ProviderPaymentSession>> {
+  const provider = paymentProvider();
+  if (provider === "local") return localPaymentSession(reference, provider, "refunded");
+  if (provider === "fake") return localPaymentSession(reference, provider, "refunded");
+  return unsupportedPaymentProvider(provider);
 }
 
 function column(ref: { field: string }): string {
@@ -1855,32 +1844,36 @@ function commerceCapacityForCatalogItem(db: Database, itemId: number): number | 
   return Number.isFinite(value) && value >= 0 ? value : null;
 }
 
-function commerceAllocatedQuantity(db: Database, itemId: number, nowIso: string): number {
+function commerceAllocatedQuantity(db: Database, itemId: number, nowIso: string, excludeLineItemIds: number[] = []): number {
   const quantityExpr = ECOMMERCE.lineItem.quantity
     ? "COALESCE(li." + column(ECOMMERCE.lineItem.quantity) + ", 0)"
     : "1";
+  const excludeClause = excludeLineItemIds.length > 0 ? " AND li.[id] NOT IN (" + excludeLineItemIds.map(() => "?").join(", ") + ")" : "";
   const row = db.query(
     "SELECT COALESCE(SUM(CASE " +
-    "WHEN li." + column(ECOMMERCE.lineItem.status) + " = ? AND (o.[id] IS NULL OR (o." + column(ECOMMERCE.order.status) + " = ? AND o." + column(ECOMMERCE.order.expiresAt) + " > ?)) THEN " + quantityExpr + " " +
+    "WHEN li." + column(ECOMMERCE.lineItem.status) + " = ? AND (o.[id] IS NULL OR (o." + column(ECOMMERCE.order.status) + " = ? AND o." + column(ECOMMERCE.order.expiresAt) + " > ?) OR (o." + column(ECOMMERCE.order.status) + " = ? AND o." + column(ECOMMERCE.order.paymentDeadlineAt) + " > ?)) THEN " + quantityExpr + " " +
     "WHEN li." + column(ECOMMERCE.lineItem.status) + " = ? THEN " + quantityExpr + " " +
     "ELSE 0 END), 0) AS allocated " +
     "FROM " + ECOMMERCE.lineItem.table + " li " +
     "LEFT JOIN " + ECOMMERCE.orderLine.table + " ol ON ol." + column(ECOMMERCE.orderLine.lineItem) + " = li.[id] " +
     "LEFT JOIN " + ECOMMERCE.order.table + " o ON o.[id] = ol." + column(ECOMMERCE.orderLine.order) + " " +
-    "WHERE li." + column(ECOMMERCE.lineItem.catalogItem) + " = ? AND li." + column(ECOMMERCE.lineItem.status) + " IN (?, ?)"
+    "WHERE li." + column(ECOMMERCE.lineItem.catalogItem) + " = ? AND li." + column(ECOMMERCE.lineItem.status) + " IN (?, ?)" + excludeClause
   ).get(
     ECOMMERCE.lineItem.reservedStatus,
     ECOMMERCE.order.pendingStatus,
+    nowIso,
+    ECOMMERCE.order.paymentPendingStatus,
     nowIso,
     ECOMMERCE.lineItem.fulfilledStatus,
     itemId,
     ECOMMERCE.lineItem.reservedStatus,
     ECOMMERCE.lineItem.fulfilledStatus,
+    ...excludeLineItemIds,
   ) as { allocated: number | null } | null;
   return Number(row?.allocated || 0);
 }
 
-function assertCommerceCapacity(db: Database, items: { itemId: number; quantity: number }[], nowIso = new Date().toISOString()): Result<void> {
+function assertCommerceCapacity(db: Database, items: { itemId: number; quantity: number }[], nowIso = new Date().toISOString(), excludeLineItemIds: number[] = []): Result<void> {
   const requestedByItem = new Map<number, number>();
   for (const item of items) {
     requestedByItem.set(item.itemId, (requestedByItem.get(item.itemId) || 0) + item.quantity);
@@ -1888,7 +1881,7 @@ function assertCommerceCapacity(db: Database, items: { itemId: number; quantity:
   for (const [itemId, requested] of requestedByItem.entries()) {
     const capacity = commerceCapacityForCatalogItem(db, itemId);
     if (capacity === null) continue;
-    const allocated = commerceAllocatedQuantity(db, itemId, nowIso);
+    const allocated = commerceAllocatedQuantity(db, itemId, nowIso, excludeLineItemIds);
     if (allocated + requested > capacity) {
       return {
         ok: false,
@@ -1905,6 +1898,25 @@ function assertCommerceCapacity(db: Database, items: { itemId: number; quantity:
     }
   }
   return { ok: true, data: undefined };
+}
+
+function commerceCapacityItemsForOrder(db: Database, orderId: number): { items: { itemId: number; quantity: number }[]; lineItemIds: number[] } {
+  const quantitySelect = ECOMMERCE.lineItem.quantity ? "COALESCE(li." + column(ECOMMERCE.lineItem.quantity) + ", 0)" : "1";
+  const rows = db.query(
+    "SELECT li.[id] AS line_item_id, li." + column(ECOMMERCE.lineItem.catalogItem) + " AS item_id, " + quantitySelect + " AS quantity " +
+    "FROM " + ECOMMERCE.lineItem.table + " li " +
+    "JOIN " + ECOMMERCE.orderLine.table + " ol ON ol." + column(ECOMMERCE.orderLine.lineItem) + " = li.[id] " +
+    "WHERE ol." + column(ECOMMERCE.orderLine.order) + " = ?"
+  ).all(orderId) as { line_item_id: number; item_id: number; quantity: number }[];
+  return {
+    lineItemIds: rows.map(row => Number(row.line_item_id)),
+    items: rows.map(row => ({ itemId: Number(row.item_id), quantity: Number(row.quantity || 1) })),
+  };
+}
+
+function assertCommerceOrderCapacity(db: Database, orderId: number, nowIso = new Date().toISOString()): Result<void> {
+  const current = commerceCapacityItemsForOrder(db, orderId);
+  return assertCommerceCapacity(db, current.items, nowIso, current.lineItemIds);
 }
 
 function commerceReceiptPayload(db: Database, order: Record<string, unknown>, transaction: Record<string, unknown>, reference: string): Record<string, unknown> {
@@ -1975,9 +1987,9 @@ function expireCommerceOrderIds(db: Database, orderIds: number[]): number {
   const expire = db.transaction(() => {
     db.query(
       "UPDATE " + ECOMMERCE.transaction.table + " SET " + column(ECOMMERCE.transaction.status) + " = ? " +
-      "WHERE " + column(ECOMMERCE.transaction.status) + " = ? AND " + column(ECOMMERCE.transaction.reference) +
+      "WHERE " + column(ECOMMERCE.transaction.status) + " IN (?, ?) AND " + column(ECOMMERCE.transaction.reference) +
       " IN (SELECT " + orderPaymentRef + " FROM " + ECOMMERCE.order.table + " WHERE " + orderId + " IN (" + placeholders + ") AND " + orderPaymentRef + " IS NOT NULL)"
-    ).run(ECOMMERCE.transaction.failedStatus, ECOMMERCE.transaction.pendingStatus, ...orderIds);
+    ).run(ECOMMERCE.transaction.cancelledStatus, ECOMMERCE.transaction.pendingStatus, ECOMMERCE.transaction.authorizedStatus, ...orderIds);
     db.query(
       "UPDATE " + ECOMMERCE.lineItem.table + " SET " + column(ECOMMERCE.lineItem.status) + " = ? WHERE [id] IN (" +
       "SELECT " + column(ECOMMERCE.orderLine.lineItem) + " FROM " + ECOMMERCE.orderLine.table +
@@ -1985,8 +1997,8 @@ function expireCommerceOrderIds(db: Database, orderIds: number[]): number {
     ).run(ECOMMERCE.lineItem.cancelledStatus, ...orderIds);
     db.query(
       "UPDATE " + ECOMMERCE.order.table + " SET " + column(ECOMMERCE.order.status) + " = ? " +
-      "WHERE " + column(ECOMMERCE.order.status) + " = ? AND [id] IN (" + placeholders + ")"
-    ).run(ECOMMERCE.order.expiredStatus, ECOMMERCE.order.pendingStatus, ...orderIds);
+      "WHERE " + column(ECOMMERCE.order.status) + " IN (?, ?) AND [id] IN (" + placeholders + ")"
+    ).run(ECOMMERCE.order.expiredStatus, ECOMMERCE.order.pendingStatus, ECOMMERCE.order.paymentPendingStatus, ...orderIds);
   });
   expire();
   return orderIds.length;
@@ -2133,7 +2145,7 @@ export function checkoutCommerceCart(db: Database, input: CommerceCheckoutInput,
   }
 }
 
-export async function createCommercePaymentIntent(db: Database, orderId: number, auth: T.AuthContext = T.ANONYMOUS_AUTH_CONTEXT): Promise<OpResult<CommercePaymentIntentResult>> {
+export async function createCommercePaymentSession(db: Database, orderId: number, auth: T.AuthContext = T.ANONYMOUS_AUTH_CONTEXT): Promise<OpResult<CommercePaymentSessionResult>> {
   if (!Number.isInteger(orderId) || orderId <= 0) {
     return { ok: false, error: "order id is required", code: "invalid" };
   }
@@ -2143,31 +2155,38 @@ export async function createCommercePaymentIntent(db: Database, orderId: number,
   if (!can(ECOMMERCE.order.entity, "update", auth, order)) {
     return authorizationError(ECOMMERCE.order.entity, "update", auth);
   }
-  if (order[ECOMMERCE.order.status.field] !== ECOMMERCE.order.pendingStatus) {
+  const orderStatus = order[ECOMMERCE.order.status.field];
+  if (orderStatus !== ECOMMERCE.order.pendingStatus && orderStatus !== ECOMMERCE.order.paymentPendingStatus) {
     return { ok: false, error: "order is not awaiting payment", code: "bad_state" };
   }
-  if (Date.parse(String(order[ECOMMERCE.order.expiresAt.field])) <= Date.now()) {
+  const now = Date.now();
+  const deadlineField = orderStatus === ECOMMERCE.order.paymentPendingStatus ? ECOMMERCE.order.paymentDeadlineAt : ECOMMERCE.order.expiresAt;
+  if (Date.parse(String(order[deadlineField.field])) <= now) {
     expireCommerceOrderIds(db, [Number(order.id)]);
     return { ok: false, error: "order expired", code: "bad_state" };
   }
+  const capacity = assertCommerceOrderCapacity(db, Number(order.id), new Date(now).toISOString());
+  if (!capacity.ok) return capacity;
 
   const existingReference = order[ECOMMERCE.order.paymentReference.field];
   if (existingReference) {
     const existing = db.query("SELECT id FROM " + ECOMMERCE.transaction.table + " WHERE " + column(ECOMMERCE.transaction.reference) + " = ?")
       .get(existingReference) as { id: number } | null;
     if (existing) {
-      const providerIntent = await retrieveProviderPaymentIntent(String(existingReference));
-      if (!providerIntent.ok) return providerIntent;
+      const providerSession = await retrieveProviderPaymentSession(String(existingReference));
+      if (!providerSession.ok) return providerSession;
       return {
         ok: true,
         data: {
           order_id: Number(order.id),
           transaction_id: existing.id,
-          reference: providerIntent.data.reference,
+          reference: providerSession.data.reference,
           amount_pence: Number(order[ECOMMERCE.order.amount.field]),
           currency: String(order[ECOMMERCE.order.currency.field]),
-          client_secret: providerIntent.data.client_secret,
-          provider: providerIntent.data.provider,
+          client_secret: providerSession.data.client_secret,
+          provider: providerSession.data.provider,
+          status: String(order[ECOMMERCE.order.status.field]),
+          payment_deadline_at: String(order[ECOMMERCE.order.paymentDeadlineAt.field]),
         },
       };
     }
@@ -2177,10 +2196,11 @@ export async function createCommercePaymentIntent(db: Database, orderId: number,
   if (lineItemIds.length === 0) return { ok: false, error: "order has no line items", code: "invalid" };
   const amount = Number(order[ECOMMERCE.order.amount.field]);
   const currency = String(order[ECOMMERCE.order.currency.field]);
-  const providerIntent = await createProviderPaymentIntent(Number(order.id), amount, currency);
-  if (!providerIntent.ok) return providerIntent;
-  const reference = providerIntent.data.reference;
+  const providerSession = await createProviderPaymentSession(Number(order.id), amount, currency);
+  if (!providerSession.ok) return providerSession;
+  const reference = providerSession.data.reference;
   const client = ECOMMERCE.order.client ? String(order[ECOMMERCE.order.client.field] ?? "web") : "web";
+  const paymentDeadlineAt = new Date(Date.now() + ECOMMERCE.checkout.paymentDeadlineMinutes * 60000).toISOString();
 
   const create = db.transaction(() => {
     const txColumns = [
@@ -2209,8 +2229,8 @@ export async function createCommercePaymentIntent(db: Database, orderId: number,
       ).run(transaction.id, lineItemId);
     }
     db.query(
-      "UPDATE " + ECOMMERCE.order.table + " SET " + column(ECOMMERCE.order.paymentReference) + " = ? WHERE id = ?"
-    ).run(reference, order.id);
+      "UPDATE " + ECOMMERCE.order.table + " SET " + column(ECOMMERCE.order.status) + " = ?, " + column(ECOMMERCE.order.paymentReference) + " = ?, " + column(ECOMMERCE.order.paymentDeadlineAt) + " = ? WHERE id = ?"
+    ).run(ECOMMERCE.order.paymentPendingStatus, reference, paymentDeadlineAt, order.id);
     return transaction.id;
   });
   const transactionId = create();
@@ -2223,16 +2243,18 @@ export async function createCommercePaymentIntent(db: Database, orderId: number,
       reference,
       amount_pence: amount,
       currency,
-      client_secret: providerIntent.data.client_secret,
-      provider: providerIntent.data.provider,
+      client_secret: providerSession.data.client_secret,
+      provider: providerSession.data.provider,
+      status: ECOMMERCE.order.paymentPendingStatus,
+      payment_deadline_at: paymentDeadlineAt,
     },
     effects: [
       {
         type: "call",
         payload: {
           service: "payment",
-          action: "create_intent",
-          provider: providerIntent.data.provider,
+          action: "create_session",
+          provider: providerSession.data.provider,
           reference,
           amount_pence: amount,
           currency,
@@ -2244,12 +2266,72 @@ export async function createCommercePaymentIntent(db: Database, orderId: number,
   };
 }
 
-export function handleCommercePaymentWebhook(db: Database, input: PaymentWebhookInput): OpResult<PaymentWebhookResult> {
+function paymentWebhookData(order: Record<string, unknown>, transaction: Record<string, unknown>, status: string, idempotent: boolean): PaymentWebhookResult {
+  return { ${legacyBookingField}order_id: Number(order.id), transaction_id: Number(transaction.id), status, idempotent };
+}
+
+function completeCommerceOrder(db: Database, order: Record<string, unknown>, transaction: Record<string, unknown>): void {
+  db.query("UPDATE " + ECOMMERCE.transaction.table + " SET " + column(ECOMMERCE.transaction.status) + " = ? WHERE id = ?")
+    .run(ECOMMERCE.transaction.completedStatus, transaction.id);
+  db.query("UPDATE " + ECOMMERCE.order.table + " SET " + column(ECOMMERCE.order.status) + " = ? WHERE id = ?")
+    .run(ECOMMERCE.order.paidStatus, order.id);
+  db.query(
+    "UPDATE " + ECOMMERCE.lineItem.table + " SET " + column(ECOMMERCE.lineItem.status) + " = ? WHERE [id] IN (" +
+    "SELECT " + column(ECOMMERCE.orderLine.lineItem) + " FROM " + ECOMMERCE.orderLine.table + " WHERE " + column(ECOMMERCE.orderLine.order) + " = ?)"
+  ).run(ECOMMERCE.lineItem.fulfilledStatus, order.id);
+}
+
+function cancelCommercePayment(db: Database, order: Record<string, unknown>, transaction: Record<string, unknown>, transactionStatus: string): void {
+  db.query("UPDATE " + ECOMMERCE.transaction.table + " SET " + column(ECOMMERCE.transaction.status) + " = ? WHERE id = ?")
+    .run(transactionStatus, transaction.id);
+  db.query("UPDATE " + ECOMMERCE.order.table + " SET " + column(ECOMMERCE.order.status) + " = ? WHERE id = ?")
+    .run(ECOMMERCE.order.cancelledStatus, order.id);
+  db.query(
+    "UPDATE " + ECOMMERCE.lineItem.table + " SET " + column(ECOMMERCE.lineItem.status) + " = ? WHERE [id] IN (" +
+    "SELECT " + column(ECOMMERCE.orderLine.lineItem) + " FROM " + ECOMMERCE.orderLine.table + " WHERE " + column(ECOMMERCE.orderLine.order) + " = ?)"
+  ).run(ECOMMERCE.lineItem.cancelledStatus, order.id);
+}
+
+function markCommerceRefundRequired(db: Database, order: Record<string, unknown>, transaction: Record<string, unknown>): void {
+  db.query("UPDATE " + ECOMMERCE.transaction.table + " SET " + column(ECOMMERCE.transaction.status) + " = ? WHERE id = ?")
+    .run(ECOMMERCE.transaction.refundRequiredStatus, transaction.id);
+  db.query("UPDATE " + ECOMMERCE.order.table + " SET " + column(ECOMMERCE.order.status) + " = ? WHERE id = ?")
+    .run(ECOMMERCE.order.refundRequiredStatus, order.id);
+  db.query(
+    "UPDATE " + ECOMMERCE.lineItem.table + " SET " + column(ECOMMERCE.lineItem.status) + " = ? WHERE [id] IN (" +
+    "SELECT " + column(ECOMMERCE.orderLine.lineItem) + " FROM " + ECOMMERCE.orderLine.table + " WHERE " + column(ECOMMERCE.orderLine.order) + " = ?)"
+  ).run(ECOMMERCE.lineItem.cancelledStatus, order.id);
+}
+
+function markCommerceRefunded(db: Database, order: Record<string, unknown>, transaction: Record<string, unknown>): void {
+  db.query("UPDATE " + ECOMMERCE.transaction.table + " SET " + column(ECOMMERCE.transaction.status) + " = ? WHERE id = ?")
+    .run(ECOMMERCE.transaction.refundedStatus, transaction.id);
+  db.query("UPDATE " + ECOMMERCE.order.table + " SET " + column(ECOMMERCE.order.status) + " = ? WHERE id = ?")
+    .run(ECOMMERCE.order.refundedStatus, order.id);
+  db.query(
+    "UPDATE " + ECOMMERCE.lineItem.table + " SET " + column(ECOMMERCE.lineItem.status) + " = ? WHERE [id] IN (" +
+    "SELECT " + column(ECOMMERCE.orderLine.lineItem) + " FROM " + ECOMMERCE.orderLine.table + " WHERE " + column(ECOMMERCE.orderLine.order) + " = ?)"
+  ).run(ECOMMERCE.lineItem.cancelledStatus, order.id);
+}
+
+function updatePaymentEventResult(db: Database, input: PaymentWebhookInput, order: Record<string, unknown>, transaction: Record<string, unknown>, resultStatus: string): void {
+  db.query(
+    "UPDATE openb2c_payment_event SET order_id = ?, transaction_id = ?, result_status = ? WHERE provider = ? AND event_id = ?"
+  ).run(Number(order.id), Number(transaction.id), resultStatus, input.provider || paymentProvider(), input.event_id);
+}
+
+export async function handleCommercePaymentWebhook(db: Database, input: PaymentWebhookInput): Promise<OpResult<PaymentWebhookResult>> {
+  if (!input.event_id || typeof input.event_id !== "string") {
+    return { ok: false, error: "event_id is required", code: "invalid" };
+  }
   if (!input.reference || typeof input.reference !== "string") {
     return { ok: false, error: "reference is required", code: "invalid" };
   }
-  if (input.status !== "succeeded" && input.status !== "failed") {
+  if (!["authorized", "captured", "failed", "cancelled", "refunded"].includes(input.status)) {
     return { ok: false, error: "unsupported payment status", code: "invalid" };
+  }
+  if (input.occurred_at !== undefined && Number.isNaN(Date.parse(input.occurred_at))) {
+    return { ok: false, error: "occurred_at must be an ISO date-time", code: "invalid" };
   }
 
   const transaction = db.query("SELECT * FROM " + ECOMMERCE.transaction.table + " WHERE " + column(ECOMMERCE.transaction.reference) + " = ?")
@@ -2259,52 +2341,114 @@ export function handleCommercePaymentWebhook(db: Database, input: PaymentWebhook
     .get(input.reference) as Record<string, unknown> | null;
   if (!order) return { ok: false, error: "order not found", code: "not_found" };
 
-  if (input.status === "succeeded") {
-    if (transaction[ECOMMERCE.transaction.status.field] === ECOMMERCE.transaction.completedStatus && order[ECOMMERCE.order.status.field] === ECOMMERCE.order.paidStatus) {
-      return { ok: true, data: { ${legacyBookingField}order_id: Number(order.id), transaction_id: Number(transaction.id), status: ECOMMERCE.order.paidStatus, idempotent: true } };
+  ensurePaymentEventTable(db);
+  const provider = input.provider || paymentProvider();
+  const insertEvent = db.query(
+    "INSERT OR IGNORE INTO openb2c_payment_event (provider, event_id, reference, status, occurred_at) VALUES (?, ?, ?, ?, ?)"
+  ).run(provider, input.event_id, input.reference, input.status, input.occurred_at || null);
+  if (insertEvent.changes === 0) {
+    const currentOrder = db.query("SELECT * FROM " + ECOMMERCE.order.table + " WHERE id = ?").get(order.id) as Record<string, unknown> | null;
+    return { ok: true, data: paymentWebhookData(currentOrder || order, transaction, String((currentOrder || order)[ECOMMERCE.order.status.field]), true) };
+  }
+
+  if (transaction[ECOMMERCE.transaction.status.field] === ECOMMERCE.transaction.completedStatus && order[ECOMMERCE.order.status.field] === ECOMMERCE.order.paidStatus) {
+    updatePaymentEventResult(db, input, order, transaction, ECOMMERCE.order.paidStatus);
+    return { ok: true, data: paymentWebhookData(order, transaction, ECOMMERCE.order.paidStatus, true) };
+  }
+
+  if (input.status === "authorized") {
+    const capacity = assertCommerceOrderCapacity(db, Number(order.id));
+    if (capacity.ok) {
+      const capture = await captureProviderPaymentSession(input.reference);
+      if (!capture.ok) return { ok: false, error: capture.error, code: capture.code, details: capture.details };
+      const complete = db.transaction(() => {
+        completeCommerceOrder(db, order, transaction);
+        updatePaymentEventResult(db, input, order, transaction, ECOMMERCE.order.paidStatus);
+      });
+      complete();
+      return {
+        ok: true,
+        data: paymentWebhookData(order, transaction, ECOMMERCE.order.paidStatus, false),
+        effects: [
+          { type: "emit", payload: { event: "commerce.order_paid", order_id: Number(order.id), transaction_id: Number(transaction.id), reference: input.reference } },
+          { type: "notify", payload: { channel: "email", template: "receipt", to: "customer", ...commerceReceiptPayload(db, order, transaction, input.reference) } },
+          { type: "call", payload: { service: "analytics", action: "track_purchase", order_id: Number(order.id), transaction_id: Number(transaction.id), amount_pence: Number(order[ECOMMERCE.order.amount.field]) } },
+        ],
+      };
     }
-    if (order[ECOMMERCE.order.status.field] !== ECOMMERCE.order.pendingStatus) {
-      return { ok: false, error: "order is not awaiting payment", code: "bad_state" };
-    }
-    const complete = db.transaction(() => {
-      db.query("UPDATE " + ECOMMERCE.transaction.table + " SET " + column(ECOMMERCE.transaction.status) + " = ? WHERE id = ?")
-        .run(ECOMMERCE.transaction.completedStatus, transaction.id);
-      db.query("UPDATE " + ECOMMERCE.order.table + " SET " + column(ECOMMERCE.order.status) + " = ? WHERE id = ?")
-        .run(ECOMMERCE.order.paidStatus, order.id);
-      db.query(
-        "UPDATE " + ECOMMERCE.lineItem.table + " SET " + column(ECOMMERCE.lineItem.status) + " = ? WHERE [id] IN (" +
-        "SELECT " + column(ECOMMERCE.orderLine.lineItem) + " FROM " + ECOMMERCE.orderLine.table + " WHERE " + column(ECOMMERCE.orderLine.order) + " = ?)"
-      ).run(ECOMMERCE.lineItem.fulfilledStatus, order.id);
+    const cancel = await cancelProviderPaymentSession(input.reference);
+    if (!cancel.ok) return { ok: false, error: cancel.error, code: cancel.code, details: cancel.details };
+    const markCancelled = db.transaction(() => {
+      cancelCommercePayment(db, order, transaction, ECOMMERCE.transaction.cancelledStatus);
+      updatePaymentEventResult(db, input, order, transaction, ECOMMERCE.order.cancelledStatus);
     });
-    complete();
+    markCancelled();
     return {
       ok: true,
-      data: { ${legacyBookingField}order_id: Number(order.id), transaction_id: Number(transaction.id), status: ECOMMERCE.order.paidStatus, idempotent: false },
+      data: paymentWebhookData(order, transaction, ECOMMERCE.order.cancelledStatus, false),
       effects: [
-        { type: "emit", payload: { event: "commerce.order_paid", order_id: Number(order.id), transaction_id: Number(transaction.id), reference: input.reference } },
-        { type: "notify", payload: { channel: "email", template: "receipt", to: "customer", ...commerceReceiptPayload(db, order, transaction, input.reference) } },
-        { type: "call", payload: { service: "analytics", action: "track_purchase", order_id: Number(order.id), transaction_id: Number(transaction.id), amount_pence: Number(order[ECOMMERCE.order.amount.field]) } },
+        { type: "emit", payload: { event: "commerce.payment_cancelled", order_id: Number(order.id), transaction_id: Number(transaction.id), reference: input.reference } },
       ],
     };
   }
 
-  if (transaction[ECOMMERCE.transaction.status.field] === ECOMMERCE.transaction.failedStatus && order[ECOMMERCE.order.status.field] === ECOMMERCE.order.cancelledStatus) {
-    return { ok: true, data: { ${legacyBookingField}order_id: Number(order.id), transaction_id: Number(transaction.id), status: ECOMMERCE.order.cancelledStatus, idempotent: true } };
+  if (input.status === "captured") {
+    const capacity = assertCommerceOrderCapacity(db, Number(order.id));
+    if (capacity.ok) {
+      const complete = db.transaction(() => {
+        completeCommerceOrder(db, order, transaction);
+        updatePaymentEventResult(db, input, order, transaction, ECOMMERCE.order.paidStatus);
+      });
+      complete();
+      return {
+        ok: true,
+        data: paymentWebhookData(order, transaction, ECOMMERCE.order.paidStatus, false),
+        effects: [
+          { type: "emit", payload: { event: "commerce.order_paid", order_id: Number(order.id), transaction_id: Number(transaction.id), reference: input.reference } },
+          { type: "notify", payload: { channel: "email", template: "receipt", to: "customer", ...commerceReceiptPayload(db, order, transaction, input.reference) } },
+          { type: "call", payload: { service: "analytics", action: "track_purchase", order_id: Number(order.id), transaction_id: Number(transaction.id), amount_pence: Number(order[ECOMMERCE.order.amount.field]) } },
+        ],
+      };
+    }
+    const refundRequired = db.transaction(() => {
+      markCommerceRefundRequired(db, order, transaction);
+      updatePaymentEventResult(db, input, order, transaction, ECOMMERCE.order.refundRequiredStatus);
+    });
+    refundRequired();
+    return {
+      ok: true,
+      data: paymentWebhookData(order, transaction, ECOMMERCE.order.refundRequiredStatus, false),
+      effects: [
+        { type: "emit", payload: { event: "commerce.refund_required", order_id: Number(order.id), transaction_id: Number(transaction.id), reference: input.reference, reason: "capacity_unavailable" } },
+        { type: "call", payload: { service: "payment", action: "refund_required", order_id: Number(order.id), transaction_id: Number(transaction.id), reference: input.reference } },
+      ],
+    };
   }
+
+  if (input.status === "refunded") {
+    const refunded = db.transaction(() => {
+      markCommerceRefunded(db, order, transaction);
+      updatePaymentEventResult(db, input, order, transaction, ECOMMERCE.order.refundedStatus);
+    });
+    refunded();
+    return {
+      ok: true,
+      data: paymentWebhookData(order, transaction, ECOMMERCE.order.refundedStatus, false),
+      effects: [
+        { type: "emit", payload: { event: "commerce.payment_refunded", order_id: Number(order.id), transaction_id: Number(transaction.id), reference: input.reference } },
+      ],
+    };
+  }
+
+  const failedStatus = input.status === "cancelled" ? ECOMMERCE.transaction.cancelledStatus : ECOMMERCE.transaction.failedStatus;
   const fail = db.transaction(() => {
-    db.query("UPDATE " + ECOMMERCE.transaction.table + " SET " + column(ECOMMERCE.transaction.status) + " = ? WHERE id = ?")
-      .run(ECOMMERCE.transaction.failedStatus, transaction.id);
-    db.query("UPDATE " + ECOMMERCE.order.table + " SET " + column(ECOMMERCE.order.status) + " = ? WHERE id = ?")
-      .run(ECOMMERCE.order.cancelledStatus, order.id);
-    db.query(
-      "UPDATE " + ECOMMERCE.lineItem.table + " SET " + column(ECOMMERCE.lineItem.status) + " = ? WHERE [id] IN (" +
-      "SELECT " + column(ECOMMERCE.orderLine.lineItem) + " FROM " + ECOMMERCE.orderLine.table + " WHERE " + column(ECOMMERCE.orderLine.order) + " = ?)"
-    ).run(ECOMMERCE.lineItem.cancelledStatus, order.id);
+    cancelCommercePayment(db, order, transaction, failedStatus);
+    updatePaymentEventResult(db, input, order, transaction, ECOMMERCE.order.cancelledStatus);
   });
   fail();
   return {
     ok: true,
-    data: { ${legacyBookingField}order_id: Number(order.id), transaction_id: Number(transaction.id), status: ECOMMERCE.order.cancelledStatus, idempotent: false },
+    data: paymentWebhookData(order, transaction, ECOMMERCE.order.cancelledStatus, false),
     effects: [
       { type: "emit", payload: { event: "commerce.payment_failed", order_id: Number(order.id), transaction_id: Number(transaction.id), reference: input.reference } },
     ],
@@ -2312,9 +2456,12 @@ export function handleCommercePaymentWebhook(db: Database, input: PaymentWebhook
 }
 
 export function expireCommerceOrders(db: Database, now: Date = new Date()): Result<{ expired: number }> {
+  ensurePaymentEventTable(db);
   const rows = db.query(
-    "SELECT id FROM " + ECOMMERCE.order.table + " WHERE " + column(ECOMMERCE.order.status) + " = ? AND " + column(ECOMMERCE.order.expiresAt) + " < ?"
-  ).all(ECOMMERCE.order.pendingStatus, now.toISOString()) as { id: number }[];
+    "SELECT id FROM " + ECOMMERCE.order.table + " WHERE (" +
+    column(ECOMMERCE.order.status) + " = ? AND " + column(ECOMMERCE.order.expiresAt) + " < ?) OR (" +
+    column(ECOMMERCE.order.status) + " = ? AND " + column(ECOMMERCE.order.paymentDeadlineAt) + " < ?)"
+  ).all(ECOMMERCE.order.pendingStatus, now.toISOString(), ECOMMERCE.order.paymentPendingStatus, now.toISOString()) as { id: number }[];
   return { ok: true, data: { expired: expireCommerceOrderIds(db, rows.map(row => row.id)) } };
 }
 
@@ -2356,8 +2503,8 @@ export function reserveBooking(db: Database, input: ReserveBookingInput, auth: T
   };
 }
 
-export async function createPaymentIntentForBooking(db: Database, bookingId: number, auth: T.AuthContext = T.ANONYMOUS_AUTH_CONTEXT): Promise<OpResult<PaymentIntentResult>> {
-  const result = await createCommercePaymentIntent(db, bookingId, auth);
+export async function createPaymentSessionForBooking(db: Database, bookingId: number, auth: T.AuthContext = T.ANONYMOUS_AUTH_CONTEXT): Promise<OpResult<PaymentSessionResult>> {
+  const result = await createCommercePaymentSession(db, bookingId, auth);
   if (!result.ok) return result;
   return {
     ok: true,
@@ -2369,12 +2516,14 @@ export async function createPaymentIntentForBooking(db: Database, bookingId: num
       currency: result.data.currency,
       client_secret: result.data.client_secret,
       provider: result.data.provider,
+      status: result.data.status,
+      payment_deadline_at: result.data.payment_deadline_at,
     },
     effects: result.effects,
   };
 }
 
-export function handlePaymentWebhook(db: Database, input: PaymentWebhookInput): OpResult<PaymentWebhookResult> {
+export async function handlePaymentWebhook(db: Database, input: PaymentWebhookInput): Promise<OpResult<PaymentWebhookResult>> {
   return handleCommercePaymentWebhook(db, input);
 }
 

@@ -47,7 +47,7 @@ export function validateSchema(schema: Schema): SchemaDiagnostic[] {
     operations: schema.operations || {},
     constraints: schema.constraints || {},
     presentation: schema.presentation || { groups: {} },
-    commerce: schema.commerce || { enabled: false, checkout: { currency: "GBP", expiryMinutes: 15, maxQuantity: 20, maxLines: 50 } },
+    commerce: schema.commerce || { enabled: false, checkout: { currency: "GBP", expiryMinutes: 15, paymentDeadlineMinutes: 30, allowAsyncPayments: false, maxQuantity: 20, maxLines: 50 } },
   } as Schema;
 
   if (!schema.tables) add(diagnostics, "tables", "is required");
