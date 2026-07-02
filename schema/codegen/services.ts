@@ -47,6 +47,7 @@ function normalizeEcommerceConfig(ecommerce: InferredCommerceConfig): Record<str
       label: ecommerce.catalog.label,
       description: ecommerce.catalog.description,
       price: requireEcommerceField("catalog.price", ecommerce.catalog.price),
+      capacity: ecommerce.catalog.capacity,
       groupBy: ecommerce.catalog.groupBy,
       variantFields: ecommerce.catalog.variantFields,
       availability: {
@@ -1614,6 +1615,12 @@ ${includeLegacyAliases ? "  booking_id: number;\n" : ""}  order_id: number;
   idempotent: boolean;
 }
 
+class CommerceCheckoutError extends Error {
+  constructor(public result: OpResult<never>) {
+    super(result.error);
+  }
+}
+
 interface ProviderPaymentIntent {
   provider: string;
   reference: string;
@@ -1729,6 +1736,11 @@ function referencedEntityName(ref: { references?: string | null }): string | nul
   return match?.[1] ?? null;
 }
 
+function referencedFieldName(ref: { references?: string | null }): string {
+  const match = ref.references?.match(/^[a-z_]+\\(([a-z_]+)\\)/);
+  return match?.[1] ?? "id";
+}
+
 function labelRecord(row: Record<string, unknown>): string {
   return String(row.name || row.email || row.reference || temporalSummaryRecord(row) || ("#" + row.id));
 }
@@ -1822,6 +1834,77 @@ function commerceLineItemIdsForOrder(db: Database, orderId: number): number[] {
     "SELECT " + column(ECOMMERCE.orderLine.lineItem) + " AS line_item_id FROM " + ECOMMERCE.orderLine.table +
     " WHERE " + column(ECOMMERCE.orderLine.order) + " = ? ORDER BY id"
   ).all(orderId) as { line_item_id: number }[]).map(row => row.line_item_id);
+}
+
+function commerceCapacityForCatalogItem(db: Database, itemId: number): number | null {
+  const capacity = ECOMMERCE.catalog.capacity;
+  if (!capacity) return null;
+
+  const capacitySelect = "capacity_source." + column(capacity.field) + " AS capacity";
+  const row = capacity.via
+    ? db.query(
+      "SELECT " + capacitySelect +
+      " FROM " + ECOMMERCE.catalog.table + " catalog_item" +
+      " JOIN " + table(capacity.field.table) + " capacity_source ON capacity_source." + column({ field: referencedFieldName(capacity.via) }) + " = catalog_item." + column(capacity.via) +
+      " WHERE catalog_item.[id] = ?"
+    ).get(itemId) as { capacity: number | null } | null
+    : db.query(
+      "SELECT catalog_item." + column(capacity.field) + " AS capacity FROM " + ECOMMERCE.catalog.table + " catalog_item WHERE catalog_item.[id] = ?"
+    ).get(itemId) as { capacity: number | null } | null;
+  const value = Number(row?.capacity);
+  return Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function commerceAllocatedQuantity(db: Database, itemId: number, nowIso: string): number {
+  const quantityExpr = ECOMMERCE.lineItem.quantity
+    ? "COALESCE(li." + column(ECOMMERCE.lineItem.quantity) + ", 0)"
+    : "1";
+  const row = db.query(
+    "SELECT COALESCE(SUM(CASE " +
+    "WHEN li." + column(ECOMMERCE.lineItem.status) + " = ? AND (o.[id] IS NULL OR (o." + column(ECOMMERCE.order.status) + " = ? AND o." + column(ECOMMERCE.order.expiresAt) + " > ?)) THEN " + quantityExpr + " " +
+    "WHEN li." + column(ECOMMERCE.lineItem.status) + " = ? THEN " + quantityExpr + " " +
+    "ELSE 0 END), 0) AS allocated " +
+    "FROM " + ECOMMERCE.lineItem.table + " li " +
+    "LEFT JOIN " + ECOMMERCE.orderLine.table + " ol ON ol." + column(ECOMMERCE.orderLine.lineItem) + " = li.[id] " +
+    "LEFT JOIN " + ECOMMERCE.order.table + " o ON o.[id] = ol." + column(ECOMMERCE.orderLine.order) + " " +
+    "WHERE li." + column(ECOMMERCE.lineItem.catalogItem) + " = ? AND li." + column(ECOMMERCE.lineItem.status) + " IN (?, ?)"
+  ).get(
+    ECOMMERCE.lineItem.reservedStatus,
+    ECOMMERCE.order.pendingStatus,
+    nowIso,
+    ECOMMERCE.lineItem.fulfilledStatus,
+    itemId,
+    ECOMMERCE.lineItem.reservedStatus,
+    ECOMMERCE.lineItem.fulfilledStatus,
+  ) as { allocated: number | null } | null;
+  return Number(row?.allocated || 0);
+}
+
+function assertCommerceCapacity(db: Database, items: { itemId: number; quantity: number }[], nowIso = new Date().toISOString()): Result<void> {
+  const requestedByItem = new Map<number, number>();
+  for (const item of items) {
+    requestedByItem.set(item.itemId, (requestedByItem.get(item.itemId) || 0) + item.quantity);
+  }
+  for (const [itemId, requested] of requestedByItem.entries()) {
+    const capacity = commerceCapacityForCatalogItem(db, itemId);
+    if (capacity === null) continue;
+    const allocated = commerceAllocatedQuantity(db, itemId, nowIso);
+    if (allocated + requested > capacity) {
+      return {
+        ok: false,
+        error: "not enough capacity available",
+        code: "bad_state",
+        details: {
+          item_id: String(itemId),
+          capacity: String(capacity),
+          allocated: String(allocated),
+          requested: String(requested),
+          available: String(Math.max(capacity - allocated, 0)),
+        },
+      };
+    }
+  }
+  return { ok: true, data: undefined };
 }
 
 function commerceReceiptPayload(db: Database, order: Record<string, unknown>, transaction: Record<string, unknown>, reference: string): Record<string, unknown> {
@@ -1963,6 +2046,8 @@ export function checkoutCommerceCart(db: Database, input: CommerceCheckoutInput,
   const amount = preparedItems.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
   const expiresAt = new Date(Date.now() + ECOMMERCE.checkout.expiryMinutes * 60000).toISOString();
   const client = typeof input.client === "string" && input.client.trim() ? input.client : "web";
+  const capacity = assertCommerceCapacity(db, preparedItems);
+  if (!capacity.ok) return capacity;
 
   try {
     const create = db.transaction(() => {
@@ -1986,6 +2071,9 @@ export function checkoutCommerceCart(db: Database, input: CommerceCheckoutInput,
         "INSERT INTO " + ECOMMERCE.order.table + " (" + orderColumns.join(", ") + ") VALUES (" +
         orderColumns.map(() => "?").join(", ") + ") RETURNING id"
       ).get(...orderValues) as { id: number };
+
+      const capacity = assertCommerceCapacity(db, preparedItems);
+      if (!capacity.ok) throw new CommerceCheckoutError(capacity);
 
       const lineItemIds: number[] = [];
       for (const item of preparedItems) {
@@ -2039,7 +2127,8 @@ export function checkoutCommerceCart(db: Database, input: CommerceCheckoutInput,
         { type: "emit", payload: { event: "commerce.order_created", order_id: result.orderId, line_item_ids: result.lineItemIds, amount_pence: amount } },
       ],
     };
-  } catch {
+  } catch (error) {
+    if (error instanceof CommerceCheckoutError) return error.result;
     return { ok: false, error: "checkout failed", code: "conflict" };
   }
 }

@@ -226,6 +226,10 @@ function commerceReport(schema: Schema): CommerceInferenceReport {
       "catalog.label": choice(fieldName(config.catalog.label), "label field uses name/title, otherwise a useful FK", [fieldEvidence(config.catalog.label)]),
       "catalog.description": choice(fieldName(config.catalog.description), "description field uses description/summary convention", [fieldEvidence(config.catalog.description)]),
       "catalog.price": choice(fieldName(config.catalog.price), "price field uses price_pence or money metadata", [fieldEvidence(config.catalog.price)]),
+      "catalog.capacity": choice(fieldName(config.catalog.capacity?.field || null), "capacity field is inferred directly from the catalog or through one FK to a capacity-bearing entity", [
+        fieldEvidence(config.catalog.capacity?.field || null),
+        fieldEvidence(config.catalog.capacity?.via || null),
+      ]),
       "catalog.groupBy": choice(config.catalog.groupBy.map(fieldName).filter(Boolean) as string[], "catalog grouping follows the inferred label field", config.catalog.groupBy.map(fieldEvidence)),
       "catalog.variantFields": choice(config.catalog.variantFields.map(fieldName).filter(Boolean) as string[], "variant fields are temporal/reference fields ordered by platform convention", config.catalog.variantFields.map(fieldEvidence)),
       "lineItem.options": choice(Object.keys(config.lineItem.options).sort(), "checkout options are non-technical, non-FK line item fields", Object.keys(config.lineItem.options).sort()),

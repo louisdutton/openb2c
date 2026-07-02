@@ -52,11 +52,12 @@ function writeGenerated(schema: Schema): string {
   return dir;
 }
 
-function seedDuchyOpera(dbPath: string) {
+function seedDuchyOpera(dbPath: string, options: { venueCapacity?: number } = {}) {
+  const venueCapacity = options.venueCapacity ?? 900;
   const db = new Database(dbPath);
   try {
     db.query("INSERT INTO user (id, email, name) VALUES (1, 'ada@example.test', 'Ada Lovelace')").run();
-    db.query("INSERT INTO venue (id, name, address, city, postcode, capacity) VALUES (1, 'Hall for Cornwall', 'Back Quay', 'Truro', 'TR1 2LL', 900)").run();
+    db.query("INSERT INTO venue (id, name, address, city, postcode, capacity) VALUES (1, 'Hall for Cornwall', 'Back Quay', 'Truro', 'TR1 2LL', ?)").run(venueCapacity);
     db.query("INSERT INTO production (id, name, season, status) VALUES (1, 'The Magic Flute', 'Summer 2026', 'active')").run();
     db.query("INSERT INTO performance (id, production_id, venue_id, starts_at, ends_at, price_pence, status) VALUES (1, 1, 1, '2026-06-27T19:30:00Z', '2026-06-27T22:00:00Z', 2500, 'scheduled')").run();
     db.query("INSERT INTO performance (id, production_id, venue_id, starts_at, ends_at, price_pence, status) VALUES (2, 1, 1, '2026-06-28T19:30:00Z', '2026-06-28T21:30:00Z', 3000, 'cancelled')").run();
@@ -254,6 +255,10 @@ describe("Duchy Opera commerce workflow", () => {
     expect(commerce?.catalog.entity).toBe("performance");
     expect(commerce?.order.entity).toBe("booking");
     expect(commerce?.lineItem.entity).toBe("ticket");
+    expect(commerce?.catalog.capacity).toMatchObject({
+      field: { table: "venue", field: "capacity" },
+      via: { table: "performance", field: "venue_id" },
+    });
 
     const dir = writeGenerated(schema);
     const dbPath = join(dir, "duchy-commerce.sqlite");
@@ -409,6 +414,73 @@ describe("Duchy Opera commerce workflow", () => {
     } finally {
       server.stop(true);
       email.stop(true);
+      clearEnv();
+    }
+  });
+
+  test("enforces inferred catalog capacity during checkout", async () => {
+    const schema = await loadDuchyOperaSchema();
+    const dir = writeGenerated(schema);
+    const dbPath = join(dir, "duchy-capacity-commerce.sqlite");
+    process.env.DB_PATH = dbPath;
+    process.env.PORT = "0";
+    process.env.AUTH_ENABLED = "false";
+
+    const { server } = await import(`${pathToFileURL(join(dir, "server.ts")).href}?capacity=${Date.now()}`);
+    const base = `http://127.0.0.1:${server.port}`;
+    seedDuchyOpera(dbPath, { venueCapacity: 2 });
+
+    try {
+      const first = await fetch(`${base}/commerce/checkout`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          user_id: 1,
+          items: [{ item_id: 1, quantity: 2, options: { ticket_type: "standard" } }],
+        }),
+      });
+      expect(first.status).toBe(201);
+      const firstOrder = await first.json() as { order_id: number };
+
+      const oversell = await fetch(`${base}/commerce/checkout`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          user_id: 1,
+          items: [{ item_id: 1, quantity: 1, options: { ticket_type: "standard" } }],
+        }),
+      });
+      expect(oversell.status).toBe(409);
+      expect(await oversell.json()).toMatchObject({
+        error: "not enough capacity available",
+        code: "bad_state",
+        details: {
+          item_id: "1",
+          capacity: "2",
+          allocated: "2",
+          requested: "1",
+          available: "0",
+        },
+      });
+
+      const db = new Database(dbPath);
+      try {
+        db.query("UPDATE booking SET expires_at = ? WHERE id = ?").run(new Date(Date.now() - 60000).toISOString(), firstOrder.order_id);
+      } finally {
+        db.close();
+      }
+
+      const afterExpiry = await fetch(`${base}/commerce/checkout`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          user_id: 1,
+          items: [{ item_id: 1, quantity: 1, options: { ticket_type: "standard" } }],
+        }),
+      });
+      expect(afterExpiry.status).toBe(201);
+    } finally {
+      server.stop(true);
       clearEnv();
     }
   });

@@ -220,6 +220,10 @@ export interface CommerceCatalogConfig {
   label: FieldRef | null;
   description: FieldRef | null;
   price: FieldRef | null;
+  capacity: {
+    field: FieldRef;
+    via: FieldRef | null;
+  } | null;
   groupBy: FieldRef[];
   variantFields: FieldRef[];
   availability: {

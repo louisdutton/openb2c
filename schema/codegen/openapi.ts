@@ -1057,6 +1057,7 @@ export function genOpenAPI(schema: Schema): string {
         },
         responses: {
           "201": { description: "Order created", content: { "application/json": { schema: { $ref: "#/components/schemas/CommerceCheckoutResult" } } } },
+          "409": { description: "Checkout rejected by commerce rules", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
           "422": { description: "Validation error", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       }),

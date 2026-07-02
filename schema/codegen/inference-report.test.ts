@@ -37,6 +37,7 @@ describe("inference report", () => {
       "performance.ends_at",
       "performance.venue_id",
     ]);
+    expect(report.commerce.fields["catalog.capacity"].value).toBe("venue.capacity");
 
     expect(report.profiles).toContainEqual(expect.objectContaining({
       entity: "artist_profile",

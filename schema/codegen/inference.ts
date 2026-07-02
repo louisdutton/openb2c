@@ -164,6 +164,7 @@ export function inferCommerce(schema: Schema): CommerceInference {
         label: labelField(schema, catalog),
         description: fieldNamed(schema, catalog, ["description", "summary"]),
         price: catalogPrice,
+        capacity: capacitySource(schema, catalog),
         groupBy: labelField(schema, catalog) ? [labelField(schema, catalog)!] : [],
         variantFields: variantFields(schema, catalog, labelField(schema, catalog)),
         availability: availability(schema, catalog),
@@ -307,6 +308,30 @@ function moneyField(schema: Schema, entity: string, names: string[]): FieldRef |
   }
   const found = Object.entries(schema.tables[entity] || {}).find(([field, col]) => field.endsWith("_pence") || col.metadata?.format === "money");
   return found ? refFor(schema.tables, entity, found[0]) : null;
+}
+
+function capacityField(schema: Schema, entity: string): FieldRef | null {
+  const direct = fieldNamed(schema, entity, ["capacity", "max_capacity"]);
+  if (direct) return direct;
+  const found = Object.entries(schema.tables[entity] || {}).find(([field, col]) =>
+    field.endsWith("_capacity") &&
+    (col.type === "integer" || col.type === "real")
+  );
+  return found ? refFor(schema.tables, entity, found[0]) : null;
+}
+
+function capacitySource(schema: Schema, catalog: string): { field: FieldRef; via: FieldRef | null } | null {
+  const direct = capacityField(schema, catalog);
+  if (direct) return { field: direct, via: null };
+
+  const candidates = foreignKeys(schema, catalog)
+    .map((fk) => ({ fk, field: capacityField(schema, fk.target.table) }))
+    .filter((entry): entry is { fk: { field: string; column: Column; target: { table: string; field: string } }; field: FieldRef } => Boolean(entry.field));
+  if (candidates.length !== 1) return null;
+  return {
+    field: candidates[0].field,
+    via: refFor(schema.tables, catalog, candidates[0].fk.field),
+  };
 }
 
 function enumField(schema: Schema, entity: string, required: string[]): FieldRef | null {
