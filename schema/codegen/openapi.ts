@@ -1045,6 +1045,15 @@ export function genOpenAPI(schema: Schema): string {
         amount_pence: { type: "integer" },
         currency: { type: "string" },
         client_secret: { type: "string" },
+        next_action: {
+          type: "object",
+          nullable: true,
+          properties: {
+            type: { type: "string", enum: ["redirect", "client_secret"] },
+            url: { type: "string" },
+            client_secret: { type: "string" },
+          },
+        },
         provider: { type: "string" },
         status: { type: "string" },
         payment_deadline_at: { type: "string", format: "date-time" },

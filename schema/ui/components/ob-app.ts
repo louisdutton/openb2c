@@ -3,6 +3,7 @@
  */
 import { ObApi } from "./ob-api";
 import { pluralDisplayName } from "../format";
+import { collectionRoutePath } from "../route";
 import { apiDescription, apiLogo, apiTitle, focusOutlet, readShellAttributes, renderApiProvider, renderSkipLink, SHELL_OBSERVED_ATTRIBUTES } from "../shell";
 import "./ob-auth-menu";
 import "./ob-route-outlet";
@@ -27,13 +28,13 @@ export class ObApp extends HTMLElement {
       ${renderSkipLink()}
       ${renderApiProvider(attributes, `
         <header class="topbar">
-          <div class="brand-lockup">
+          <a class="brand-lockup" href="#/" data-action="home" aria-label="Home">
             <img class="brand-logo" data-role="logo" alt="" hidden />
             <div class="brand-copy">
               <div class="title" data-role="title">OpenB2C</div>
               <div class="description" data-role="description"></div>
             </div>
-          </div>
+          </a>
           <div class="top-actions">
             <ob-auth-menu></ob-auth-menu>
             <button class="nav-button" type="button" data-action="commerce" hidden>Browse</button>
@@ -46,8 +47,12 @@ export class ObApp extends HTMLElement {
     this.querySelector<HTMLButtonElement>('[data-action="skip"]')?.addEventListener("click", () => {
       focusOutlet(this, "ob-route-outlet");
     });
+    this.querySelector<HTMLAnchorElement>('[data-action="home"]')?.addEventListener("click", (event) => {
+      event.preventDefault();
+      navigateCatalog(catalogPath(ObApi.instance));
+    });
     this.querySelector<HTMLButtonElement>('[data-action="commerce"]')?.addEventListener("click", () => {
-      location.hash = "#/commerce";
+      navigateCatalog(catalogPath(ObApi.instance));
     });
 
     const api = this.querySelector("ob-api") as ObApi | null;
@@ -56,12 +61,15 @@ export class ObApp extends HTMLElement {
       const titleEl = this.querySelector<HTMLElement>('[data-role="title"]');
       const descriptionEl = this.querySelector<HTMLElement>('[data-role="description"]');
       const logoEl = this.querySelector<HTMLImageElement>('[data-role="logo"]');
+      const homeLink = this.querySelector<HTMLAnchorElement>('[data-action="home"]');
       const commerceButton = this.querySelector<HTMLButtonElement>('[data-action="commerce"]');
       const title = apiTitle(api);
       const logo = apiLogo(api);
       const catalogEntity = api.getEcommerceConfig()?.catalog?.entity;
+      const routePath = catalogPath(api);
       if (titleEl) titleEl.textContent = title;
       if (descriptionEl) descriptionEl.textContent = apiDescription(api);
+      if (homeLink) homeLink.href = `#${routePath}`;
       if (logoEl && logo) {
         logoEl.src = logo.src;
         logoEl.alt = logo.alt || `${title} logo`;
@@ -76,6 +84,16 @@ export class ObApp extends HTMLElement {
       }
     });
   }
+}
+
+function navigateCatalog(path: string) {
+  document.dispatchEvent(new CustomEvent("ob-commerce-view", { detail: { view: "catalog" } }));
+  const target = `#${path}`;
+  if (location.hash !== target) location.hash = target;
+}
+
+function catalogPath(api?: ObApi | null): string {
+  return collectionRoutePath(api?.getEcommerceConfig()?.catalog?.entity);
 }
 
 function commerceActionLabel(api: ObApi, catalogEntity?: string): string {

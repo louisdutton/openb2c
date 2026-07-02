@@ -103,6 +103,9 @@ function genConfiguredCommerceRoutes(schema: Schema): string[] {
     }
     return r.ok ? corsResponse(r.data, { status: 201 }) : corsResponse(r, { status: S.statusForResult(r) });
   }},
+  { method: "GET", path: "/commerce/payments/local-simulator", handler: async (req) => {
+    return localPaymentSimulatorResponse(req);
+  }},
   { method: "POST", path: "/commerce/payments/webhook", handler: async (req, _, __, signal) => {
     const contentType = req.headers.get("content-type") || "";
     const mediaType = contentType.split(";")[0]?.trim().toLowerCase();
@@ -769,6 +772,106 @@ function parsePaymentWebhookInput(value: unknown): S.Result<S.PaymentWebhookInpu
     details.occurred_at = "occurred_at must be an ISO date-time";
   }
   return Object.keys(details).length ? requestValidationError<S.PaymentWebhookInput>(details) : { ok: true, data: value as S.PaymentWebhookInput };
+}
+
+function localPaymentProvider(): string {
+  return (process.env.PAYMENT_PROVIDER || "local").trim().toLowerCase();
+}
+
+function localPaymentSimulatorAllowed(): boolean {
+  const provider = localPaymentProvider();
+  return fakeProvidersEnabled() && (provider === "local" || provider === "fake");
+}
+
+function localPaymentEventId(reference: string, status: string): string {
+  return "local_" + status + "_" + reference.replace(/[^A-Za-z0-9_-]/g, "_");
+}
+
+async function localPaymentSimulatorAction(reference: string, provider: string, status: S.PaymentWebhookInput["status"]): Promise<Record<string, string>> {
+  const body = JSON.stringify({
+    event_id: localPaymentEventId(reference, status),
+    reference,
+    status,
+    provider,
+    occurred_at: new Date().toISOString(),
+  });
+  const secret = process.env.PAYMENT_WEBHOOK_SECRET;
+  const signature = secret ? "sha256=" + await hmacSha256Hex(secret, body) : "";
+  return { status, reference, body, signature };
+}
+
+async function localPaymentSimulatorResponse(req: Request): Promise<Response> {
+  if (!localPaymentSimulatorAllowed()) {
+    return corsResponse({ error: "local payment simulator disabled", code: "not_found" }, { status: 404 });
+  }
+  const url = new URL(req.url);
+  const reference = url.searchParams.get("reference") || "";
+  const provider = url.searchParams.get("provider") || localPaymentProvider();
+  if (!reference) {
+    return corsResponse({ error: "reference is required", code: "invalid" }, { status: 422 });
+  }
+  if (provider !== "local" && provider !== "fake") {
+    return corsResponse({ error: "unsupported local payment provider", code: "invalid" }, { status: 422 });
+  }
+  const actions = await Promise.all((["authorized", "captured", "failed", "cancelled"] as const).map(status => localPaymentSimulatorAction(reference, provider, status)));
+  return new Response(localPaymentSimulatorHtml(reference, provider, actions), {
+    headers: { "content-type": "text/html; charset=utf-8" },
+  });
+}
+
+function localPaymentSimulatorHtml(reference: string, provider: string, actions: Record<string, string>[]): string {
+  const actionJson = JSON.stringify(actions).replace(/</g, "\\u003c");
+  return [
+    "<!doctype html>",
+    "<html>",
+    "<head>",
+    "<meta charset=\\"utf-8\\">",
+    "<meta name=\\"viewport\\" content=\\"width=device-width, initial-scale=1\\">",
+    "<title>Local payment simulator</title>",
+    "<style>",
+    "body{font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:20px;background:#f8fafc;color:#111827}",
+    "main{max-width:520px;margin:0 auto;background:#fff;border:1px solid #d1d5db;border-radius:8px;padding:20px}",
+    "h1{font-size:20px;margin:0 0 8px}",
+    "p{margin:0 0 16px;color:#4b5563}",
+    ".actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}",
+    "button{border:1px solid #111827;background:#111827;color:#fff;border-radius:6px;padding:10px 12px;font:inherit;cursor:pointer}",
+    "button.secondary{background:#fff;color:#111827}",
+    "pre{white-space:pre-wrap;background:#f3f4f6;border-radius:6px;padding:12px;margin-top:16px;font-size:12px}",
+    "</style>",
+    "</head>",
+    "<body>",
+    "<main>",
+    "<h1>Local payment simulator</h1>",
+    "<p>Provider: " + escapeHtml(provider) + "</p>",
+    "<p>Reference: " + escapeHtml(reference) + "</p>",
+    "<div class=\\"actions\\" id=\\"actions\\"></div>",
+    "<pre id=\\"result\\" aria-live=\\"polite\\"></pre>",
+    "</main>",
+    "<script>",
+    "const actions = " + actionJson + ";",
+    "const labels = { authorized: 'Authorize and capture', captured: 'Mark captured', failed: 'Fail payment', cancelled: 'Cancel payment' };",
+    "const result = document.getElementById('result');",
+    "for (const action of actions) {",
+    "  const button = document.createElement('button');",
+    "  button.type = 'button';",
+    "  button.textContent = labels[action.status] || action.status;",
+    "  if (action.status === 'failed' || action.status === 'cancelled') button.className = 'secondary';",
+    "  button.addEventListener('click', async () => {",
+    "    button.disabled = true;",
+    "    result.textContent = 'Processing payment event...';",
+    "    const headers = { 'content-type': 'application/json' };",
+    "    if (action.signature) headers['X-OpenB2C-Signature'] = action.signature;",
+    "    const response = await fetch('/commerce/payments/webhook', { method: 'POST', headers, body: action.body });",
+    "    const data = await response.json();",
+    "    result.textContent = JSON.stringify(data, null, 2);",
+    "    window.parent && window.parent.postMessage({ type: 'openb2c-payment-result', reference: action.reference, result: data }, '*');",
+    "  });",
+    "  document.getElementById('actions').appendChild(button);",
+    "}",
+    "</script>",
+    "</body>",
+    "</html>",
+  ].join("\\n");
 }
 
 function hex(bytes: ArrayBuffer): string {

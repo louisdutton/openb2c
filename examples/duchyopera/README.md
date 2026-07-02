@@ -57,8 +57,8 @@ Fresh local databases apply reference venue data and demo fixtures by default. S
 ## Checkout Flow
 
 1. `POST /commerce/checkout` creates a pending order from a cart.
-2. `POST /commerce/orders/{id}/payment-session` creates or retrieves an idempotent provider payment session and starts the bounded payment lock.
-3. `POST /commerce/payments/webhook` receives signed provider callbacks for authorized, captured, failed, cancelled, and refunded events.
+2. `POST /commerce/orders/{id}/payment-session` creates or retrieves an idempotent provider payment session, starts the bounded payment lock, and returns a provider-neutral `next_action`.
+3. The local/fake provider `next_action` opens a simulator that sends signed provider-style events to `POST /commerce/payments/webhook`.
 4. `POST /commerce/orders/expire` cancels unpaid reservations after their checkout or payment deadline window.
 
 Use `PAYMENT_PROVIDER=fake` or `local` for development. Production provider adapters such as Stripe or Adyen are added after this provider-neutral contract.

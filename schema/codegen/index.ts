@@ -23,7 +23,8 @@ export { genAdminAppShell, genAppShell, genPublicAppShell } from "./ui";
 export { genAdminStylesheet, genPublicStylesheet } from "./ui-styles";
 export { assertValidSchema, formatSchemaDiagnostics, validateSchema, SchemaValidationError } from "./validation";
 
-import { copyFileSync, existsSync, mkdirSync, rmSync, statSync, writeFileSync } from "fs";
+import { createHash } from "crypto";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "fs";
 import { extname, isAbsolute, join, resolve } from "path";
 import type { Schema } from "./types";
 import { genSQL } from "./sql";
@@ -93,10 +94,8 @@ if (import.meta.main) {
   mkdirSync(adminUiDir, { recursive: true });
   const uiSchema = prepareUiSchema(schema, uiDir, adminUiDir);
   const uiOpenApiJson = genOpenAPI(uiSchema);
-  writeFileSync(join(uiDir, "index.html"), genPublicAppShell(schema));
   writeFileSync(join(uiDir, "styles.css"), genPublicStylesheet());
   writeFileSync(join(uiDir, "openapi.json"), uiOpenApiJson);
-  writeFileSync(join(adminUiDir, "index.html"), genAdminAppShell(schema));
   writeFileSync(join(adminUiDir, "styles.css"), genAdminStylesheet());
   writeFileSync(join(adminUiDir, "openapi.json"), uiOpenApiJson);
   rmSync(join(uiDir, "chunks"), { recursive: true, force: true });
@@ -138,6 +137,9 @@ if (import.meta.main) {
     process.exit(1);
   }
 
+  writeFileSync(join(uiDir, "index.html"), genPublicAppShell(schema, assetRevision(uiDir)));
+  writeFileSync(join(adminUiDir, "index.html"), genAdminAppShell(schema, assetRevision(adminUiDir)));
+
   logWrite(explainFormat, `${uiDir}/index.html`);
   logWrite(explainFormat, `${uiDir}/styles.css`);
   logWrite(explainFormat, `${uiDir}/app.js`);
@@ -174,6 +176,13 @@ function parseExplainFormat(args: string[], envValue: string | undefined): Expla
 function logWrite(explainFormat: ExplainFormat, path: string): void {
   if (explainFormat) return;
   console.log(`wrote ${path}`);
+}
+
+function assetRevision(dir: string): string {
+  const hash = createHash("sha256");
+  hash.update(readFileSync(join(dir, "styles.css")));
+  hash.update(readFileSync(join(dir, "app.js")));
+  return hash.digest("hex").slice(0, 12);
 }
 
 function prepareUiSchema(schema: Schema, uiDir: string, adminUiDir: string): Schema {

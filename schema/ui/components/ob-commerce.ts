@@ -50,6 +50,10 @@ type CommerceCatalogPayload = {
 };
 
 export class ObCommerce extends HTMLElement {
+  static get observedAttributes() {
+    return ["view"];
+  }
+
   private _selectedGroup = "";
   private _selectedItemId = "";
   private _quantity = "1";
@@ -58,16 +62,31 @@ export class ObCommerce extends HTMLElement {
   private _cart: CartLine[] = [];
   private _checkoutResult: any = null;
   private _paymentSession: any = null;
+  private _purchaseResult: any = null;
   private _error = "";
   private _loading = false;
   private _reviewingCart = false;
   private _availableItems: Record<string, unknown>[] = [];
   private _stateRestored = false;
   private _renderSeq = 0;
+  private _onCommerceView = (event: Event) => {
+    const view = event instanceof CustomEvent ? event.detail?.view : "";
+    if (view !== "catalog") return;
+    this._showCatalog();
+    void this._render();
+  };
   private _onAuthChanged = () => {
     if (ObApi.instance?.authContext.userId !== null && this._error === "Sign in to continue.") {
       this._error = "";
     }
+    void this._render();
+  };
+  private _onPaymentMessage = (event: MessageEvent) => {
+    const data = event.data;
+    if (!data || data.type !== "openb2c-payment-result") return;
+    if (!this._paymentSession || data.reference !== this._paymentSession.reference) return;
+    this._purchaseResult = data.result;
+    if (this._checkoutResult && data.result?.status) this._checkoutResult.status = data.result.status;
     void this._render();
   };
 
@@ -78,11 +97,21 @@ export class ObCommerce extends HTMLElement {
 
   async connectedCallback() {
     document.addEventListener("ob-auth-changed", this._onAuthChanged as EventListener);
+    document.addEventListener("ob-commerce-view", this._onCommerceView as EventListener);
+    window.addEventListener("message", this._onPaymentMessage as EventListener);
     await this._render();
+  }
+
+  attributeChangedCallback(name: string, oldValue: string | null, newValue: string | null) {
+    if (name !== "view" || oldValue === newValue || !this.isConnected) return;
+    this._showRouteView(newValue);
+    void this._render();
   }
 
   disconnectedCallback() {
     document.removeEventListener("ob-auth-changed", this._onAuthChanged as EventListener);
+    document.removeEventListener("ob-commerce-view", this._onCommerceView as EventListener);
+    window.removeEventListener("message", this._onPaymentMessage as EventListener);
   }
 
   private _config(api: ObApi): CommerceConfig {
@@ -132,6 +161,7 @@ export class ObCommerce extends HTMLElement {
     }
     if (!this._stateRestored) {
       this._restoreState(api);
+      this._showRouteView(this.getAttribute("view"));
       this._stateRestored = true;
     }
 
@@ -213,6 +243,7 @@ export class ObCommerce extends HTMLElement {
         this._cart = this._cart.filter((line) => line.id !== button.dataset.removeLine);
         this._checkoutResult = null;
         this._paymentSession = null;
+        this._purchaseResult = null;
         if (this._cart.length === 0) this._reviewingCart = false;
         this._render();
       });
@@ -245,10 +276,11 @@ export class ObCommerce extends HTMLElement {
     this.shadowRoot!.querySelector<HTMLButtonElement>('[data-action="review-cart"]')?.addEventListener("click", () => {
       this._reviewingCart = true;
       this._error = "";
+      if (location.hash !== "#/cart") location.hash = "#/cart";
       this._render();
     });
     this.shadowRoot!.querySelector<HTMLButtonElement>('[data-action="request-auth"]')?.addEventListener("click", () => {
-      document.dispatchEvent(new CustomEvent("ob-auth-required", { detail: { returnTo: "/commerce" } }));
+      document.dispatchEvent(new CustomEvent("ob-auth-required", { detail: { returnTo: "/cart" } }));
       this._error = "Sign in to continue.";
       this._render();
     });
@@ -260,6 +292,7 @@ export class ObCommerce extends HTMLElement {
       this._cart = [];
       this._checkoutResult = null;
       this._paymentSession = null;
+      this._purchaseResult = null;
       this._reviewingCart = false;
       this._error = "";
       this._render();
@@ -277,7 +310,8 @@ export class ObCommerce extends HTMLElement {
     lookups: LookupMap,
     optionDefs: Record<string, CommerceOption>,
   ): string {
-    if (this._paymentSession) return this._renderCompleteStep();
+    if (this._purchaseResult) return this._renderPurchaseResult();
+    if (this._paymentSession) return this._renderProviderHandoffStep();
     if (this._checkoutResult) return this._renderPaymentStep();
     if (this._cart.length > 0 && this._reviewingCart) return this._renderReviewStep(api, config, lookups);
     if (selectedItem) return this._renderConfigureStep(optionDefs, selectedItem, config, lookups);
@@ -371,15 +405,39 @@ export class ObCommerce extends HTMLElement {
     `;
   }
 
-  private _renderCompleteStep(): string {
+  private _renderProviderHandoffStep(): string {
+    return `
+      <section class="panel" aria-labelledby="provider-title">
+        <div class="panel-header">
+          <h2 id="provider-title">Payment</h2>
+          <span class="step">Provider</span>
+        </div>
+        ${this._renderCheckoutSummary()}
+        ${this._renderPaymentSummary()}
+        ${this._renderNextAction()}
+      </section>
+    `;
+  }
+
+  private _renderPurchaseResult(): string {
+    const status = String(this._purchaseResult?.status || this._checkoutResult?.status || "");
+    const paid = status === "paid";
+    const cancelled = status === "cancelled";
+    const refundRequired = status === "refund_required";
+    const title = paid ? "Booking confirmed" : refundRequired ? "Payment needs review" : cancelled ? "Payment cancelled" : "Payment updated";
+    const receipt = paid ? "Queued" : "Not sent";
     return `
       <section class="panel" aria-labelledby="complete-title">
         <div class="panel-header">
-          <h2 id="complete-title">Payment session ready</h2>
+          <h2 id="complete-title">${escapeHtml(title)}</h2>
           <span class="step">Complete</span>
         </div>
         ${this._renderCheckoutSummary()}
         ${this._renderPaymentSummary()}
+        <div class="summary">
+          <div class="summary-row"><span>Result</span><span>${escapeHtml(status || "-")}</span></div>
+          <div class="summary-row"><span>Receipt</span><span>${escapeHtml(receipt)}</span></div>
+        </div>
         <div class="actions">
           <button type="button" data-action="start-over">Start another order</button>
         </div>
@@ -573,8 +631,44 @@ export class ObCommerce extends HTMLElement {
       <div class="summary">
         <div class="summary-row"><span>Transaction</span><span>#${escapeHtml(this._paymentSession.transaction_id)}</span></div>
         <div class="summary-row"><span>Reference</span><span>${escapeHtml(this._paymentSession.reference || "-")}</span></div>
+        <div class="summary-row"><span>Provider</span><span>${escapeHtml(this._paymentSession.provider || "-")}</span></div>
       </div>
     `;
+  }
+
+  private _renderNextAction(): string {
+    const action = this._paymentSession?.next_action;
+    if (!action) return `<p class="notice">Payment session created.</p>`;
+    if (action.type === "redirect" && action.url) {
+      const url = this._paymentActionUrl(String(action.url));
+      const isLocal = url.includes("/commerce/payments/local-simulator");
+      if (isLocal) {
+        return `
+          <div class="payment-frame-wrap">
+            <iframe class="payment-frame" title="Local payment simulator" src="${escapeAttr(url)}"></iframe>
+          </div>
+        `;
+      }
+      return `
+        <div class="actions">
+          <a class="primary" href="${escapeAttr(url)}">Continue to payment</a>
+        </div>
+      `;
+    }
+    if (action.type === "client_secret") {
+      return `<p class="notice">Payment client secret received.</p>`;
+    }
+    return `<p class="notice">Payment session created.</p>`;
+  }
+
+  private _paymentActionUrl(url: string): string {
+    const api = ObApi.instance!;
+    if (url.startsWith("/")) return api.url(url);
+    try {
+      return new URL(url, api.apiBase || location.origin).toString();
+    } catch {
+      return url;
+    }
   }
 
   private _addSelectedToCart() {
@@ -625,6 +719,7 @@ export class ObCommerce extends HTMLElement {
     ];
     this._checkoutResult = null;
     this._paymentSession = null;
+    this._purchaseResult = null;
     this._reviewingCart = true;
     this._error = "";
     this._render();
@@ -661,7 +756,7 @@ export class ObCommerce extends HTMLElement {
   private async _checkout() {
     if (this._cart.length === 0) return;
     if (ObApi.instance!.authContext.userId === null) {
-      document.dispatchEvent(new CustomEvent("ob-auth-required", { detail: { returnTo: "/commerce" } }));
+      document.dispatchEvent(new CustomEvent("ob-auth-required", { detail: { returnTo: "/cart" } }));
       this._error = "Sign in to continue.";
       await this._render();
       return;
@@ -693,6 +788,7 @@ export class ObCommerce extends HTMLElement {
       }
       this._checkoutResult = await res.json();
       this._paymentSession = null;
+      this._purchaseResult = null;
       this._cart = [];
       this._reviewingCart = false;
       this._loading = false;
@@ -715,6 +811,7 @@ export class ObCommerce extends HTMLElement {
         return;
       }
       this._paymentSession = await res.json();
+      this._purchaseResult = null;
       this._error = "";
       await this._render();
     } catch (error: any) {
@@ -823,6 +920,34 @@ export class ObCommerce extends HTMLElement {
 
   private _storageKey(api: ObApi): string {
     return `openb2c:${api.spec?.info.title || "app"}:commerce-state`;
+  }
+
+  private _showRouteView(view: string | null) {
+    if (view === "cart") {
+      this._showCart();
+      return;
+    }
+    this._showCatalog();
+  }
+
+  private _showCatalog() {
+    this._selectedGroup = "";
+    this._selectedItemId = "";
+    this._reviewingCart = false;
+    this._checkoutResult = null;
+    this._paymentSession = null;
+    this._purchaseResult = null;
+    this._error = "";
+  }
+
+  private _showCart() {
+    this._selectedGroup = "";
+    this._selectedItemId = "";
+    this._checkoutResult = null;
+    this._paymentSession = null;
+    this._purchaseResult = null;
+    this._reviewingCart = this._cart.length > 0;
+    this._error = "";
   }
 
   private _cartTotal(config: CommerceConfig): number {

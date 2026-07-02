@@ -1572,9 +1572,16 @@ export interface CommercePaymentSessionResult {
   amount_pence: number;
   currency: string;
   client_secret: string;
+  next_action: CommercePaymentNextAction | null;
   provider: string;
   status: string;
   payment_deadline_at: string;
+}
+
+export interface CommercePaymentNextAction {
+  type: "redirect" | "client_secret";
+  url?: string;
+  client_secret?: string;
 }
 
 ${includeLegacyAliases ? `
@@ -1608,6 +1615,7 @@ export interface PaymentSessionResult {
   amount_pence: number;
   currency: string;
   client_secret: string;
+  next_action: CommercePaymentNextAction | null;
   provider: string;
   status: string;
   payment_deadline_at: string;
@@ -1658,6 +1666,7 @@ interface ProviderPaymentSession {
   provider: string;
   reference: string;
   client_secret: string;
+  next_action: CommercePaymentNextAction | null;
   status: "pending" | "authorized" | "captured" | "cancelled" | "refunded";
 }
 
@@ -1671,7 +1680,19 @@ function unsupportedPaymentProvider(provider: string): Result<ProviderPaymentSes
 
 function localPaymentSession(reference?: string, provider = "local", status: ProviderPaymentSession["status"] = "pending"): Result<ProviderPaymentSession> {
   const id = reference || ("fake_ps_" + crypto.randomUUID());
-  return { ok: true, data: { provider, reference: id, client_secret: id + "_secret", status } };
+  return {
+    ok: true,
+    data: {
+      provider,
+      reference: id,
+      client_secret: id + "_secret",
+      next_action: {
+        type: "redirect",
+        url: "/commerce/payments/local-simulator?reference=" + encodeURIComponent(id) + "&provider=" + encodeURIComponent(provider),
+      },
+      status,
+    },
+  };
 }
 
 async function createProviderPaymentSession(orderId: number, amount: number, currency: string): Promise<Result<ProviderPaymentSession>> {
@@ -1919,8 +1940,47 @@ function assertCommerceOrderCapacity(db: Database, orderId: number, nowIso = new
   return assertCommerceCapacity(db, current.items, nowIso, current.lineItemIds);
 }
 
+function commerceCatalogLabelForReceipt(db: Database, catalog: Record<string, unknown> | null, catalogItemId: number): string {
+  if (!catalog) return "#" + catalogItemId;
+  const labelRef = ECOMMERCE.catalog.label;
+  if (!labelRef) return labelRecord(catalog);
+  const raw = catalog[labelRef.field];
+  if (raw === null || raw === undefined || raw === "") return labelRecord(catalog);
+  const entity = referencedEntityName(labelRef);
+  if (entity) {
+    const target = db.query("SELECT * FROM " + table(entity) + " WHERE [id] = ?").get(raw) as Record<string, unknown> | null;
+    if (target) return labelRecord(target);
+  }
+  return String(raw);
+}
+
+function commerceReceiptLineItems(db: Database, orderId: number): Record<string, unknown>[] {
+  const rows = db.query(
+    "SELECT li.* FROM " + ECOMMERCE.lineItem.table + " li " +
+    "JOIN " + ECOMMERCE.orderLine.table + " ol ON ol." + column(ECOMMERCE.orderLine.lineItem) + " = li.[id] " +
+    "WHERE ol." + column(ECOMMERCE.orderLine.order) + " = ? ORDER BY li.[id]"
+  ).all(orderId) as Record<string, unknown>[];
+  const optionEntries = Object.entries(optionDefinitions()).filter((entry): entry is [string, ReturnType<typeof optionDefinitions>[string] & { field: { field: string } }] => Boolean(entry[1].field));
+  return rows.map(row => {
+    const catalogItemId = Number(row[ECOMMERCE.lineItem.catalogItem.field]);
+    const catalog = db.query("SELECT * FROM " + ECOMMERCE.catalog.table + " WHERE [id] = ?").get(catalogItemId) as Record<string, unknown> | null;
+    const quantity = ECOMMERCE.lineItem.quantity ? Number(row[ECOMMERCE.lineItem.quantity.field] || 1) : 1;
+    const unitPrice = Number(row[ECOMMERCE.lineItem.price.field] || 0);
+    return {
+      id: Number(row.id),
+      catalog_item_id: catalogItemId,
+      catalog_label: commerceCatalogLabelForReceipt(db, catalog, catalogItemId),
+      quantity,
+      unit_amount_pence: unitPrice,
+      amount_pence: unitPrice * quantity,
+      options: Object.fromEntries(optionEntries.map(([name, def]) => [name, row[def.field.field] ?? null])),
+    };
+  });
+}
+
 function commerceReceiptPayload(db: Database, order: Record<string, unknown>, transaction: Record<string, unknown>, reference: string): Record<string, unknown> {
   const orderId = Number(order.id);
+  const lineItemIds = commerceLineItemIdsForOrder(db, orderId);
   return {
     order_id: orderId,
     transaction_id: Number(transaction.id),
@@ -1928,7 +1988,9 @@ function commerceReceiptPayload(db: Database, order: Record<string, unknown>, tr
     amount_pence: Number(order[ECOMMERCE.order.amount.field]),
     currency: String(order[ECOMMERCE.order.currency.field]),
     customer: commerceCustomerForOrder(db, order),
-    line_item_ids: commerceLineItemIdsForOrder(db, orderId),
+    line_item_ids: lineItemIds,
+    ticket_ids: lineItemIds,
+    line_items: commerceReceiptLineItems(db, orderId),
   };
 }
 
@@ -2184,6 +2246,7 @@ export async function createCommercePaymentSession(db: Database, orderId: number
           amount_pence: Number(order[ECOMMERCE.order.amount.field]),
           currency: String(order[ECOMMERCE.order.currency.field]),
           client_secret: providerSession.data.client_secret,
+          next_action: providerSession.data.next_action,
           provider: providerSession.data.provider,
           status: String(order[ECOMMERCE.order.status.field]),
           payment_deadline_at: String(order[ECOMMERCE.order.paymentDeadlineAt.field]),
@@ -2244,6 +2307,7 @@ export async function createCommercePaymentSession(db: Database, orderId: number
       amount_pence: amount,
       currency,
       client_secret: providerSession.data.client_secret,
+      next_action: providerSession.data.next_action,
       provider: providerSession.data.provider,
       status: ECOMMERCE.order.paymentPendingStatus,
       payment_deadline_at: paymentDeadlineAt,
@@ -2515,6 +2579,7 @@ export async function createPaymentSessionForBooking(db: Database, bookingId: nu
       amount_pence: result.data.amount_pence,
       currency: result.data.currency,
       client_secret: result.data.client_secret,
+      next_action: result.data.next_action,
       provider: result.data.provider,
       status: result.data.status,
       payment_deadline_at: result.data.payment_deadline_at,

@@ -36,7 +36,7 @@ describe("generated UI browser automation", () => {
     const { context, page, errors } = await newPage();
 
     try {
-      await page.goto(`${staticApp.baseUrl}/index.html#/commerce`, { waitUntil: "domcontentloaded" });
+      await page.goto(`${staticApp.baseUrl}/index.html#/performances`, { waitUntil: "domcontentloaded" });
       await page.getByRole("heading", { name: "Performances" }).waitFor();
       await page.getByRole("button", { name: "What's on" }).waitFor();
       await page.getByText(/27 Jun 2026.*19:30/).waitFor();
@@ -53,8 +53,24 @@ describe("generated UI browser automation", () => {
 
       await page.getByRole("heading", { name: "Review cart" }).waitFor();
       await page.getByText("Ticket Type: patron").waitFor();
+      await page.getByRole("button", { name: "What's on" }).click();
+      await page.getByRole("button", { name: /The Magic Flute.*27 Jun 2026.*1 option from £25.00/ }).waitFor();
+      expect(page.url()).toContain("#/performances");
+      expect(page.url()).not.toContain("view=");
+      expect(await page.getByRole("heading", { name: "Review cart" }).count()).toBe(0);
+      await page.getByRole("button", { name: "Cart: 1 · £25.00" }).click();
+      await page.getByRole("heading", { name: "Review cart" }).waitFor();
+      expect(page.url()).toContain("#/cart");
       await page.getByRole("button", { name: "Sign in to checkout" }).click();
 
+      await page.getByRole("heading", { name: "Sign in" }).waitFor();
+      await page.getByRole("link", { name: "Home" }).click();
+      await page.getByRole("heading", { name: "Performances" }).waitFor();
+      expect(page.url()).toContain("#/performances");
+      expect(page.url()).not.toContain("view=");
+      await page.getByRole("button", { name: "Cart: 1 · £25.00" }).click();
+      await page.getByRole("heading", { name: "Review cart" }).waitFor();
+      await page.getByRole("button", { name: "Sign in to checkout" }).click();
       await page.getByRole("heading", { name: "Sign in" }).waitFor();
       await page.getByLabel(/Email/).fill(`ui-checkout-${Date.now()}@example.test`);
       await page.getByRole("button", { name: "Send code" }).click();
@@ -66,8 +82,14 @@ describe("generated UI browser automation", () => {
       await page.getByRole("heading", { name: "Confirm payment" }).waitFor();
       await page.getByRole("button", { name: "Create payment session" }).click();
 
-      await page.getByRole("heading", { name: "Payment session ready" }).waitFor();
+      await page.getByRole("heading", { name: "Payment" }).waitFor();
       await page.getByText(/fake_ps_/).waitFor();
+      const simulator = page.frameLocator('iframe[title="Local payment simulator"]');
+      await simulator.getByRole("heading", { name: "Local payment simulator" }).waitFor();
+      await simulator.getByRole("button", { name: "Authorize and capture" }).click();
+      await page.getByRole("heading", { name: "Booking confirmed" }).waitFor();
+      await page.getByText("Receipt").waitFor();
+      await page.getByText("Queued").waitFor();
       expect(errors).toEqual([]);
     } finally {
       await context.close();

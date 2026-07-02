@@ -2,7 +2,7 @@
  * <ob-route-outlet> - Public web app router.
  */
 import { ObApi } from "./ob-api";
-import { parseHash, safeReturnTo } from "../route";
+import { collectionRoutePath, parseHash, safeReturnTo } from "../route";
 
 export class ObRouteOutlet extends HTMLElement {
   private _routeSeq = 0;
@@ -59,11 +59,15 @@ export class ObRouteOutlet extends HTMLElement {
       if (returnTo) page.setAttribute("return-to", returnTo);
       return { node: page };
     }
-    if ((hash === "/" || hash === "/commerce") && api.hasCommerceWorkflow()) {
+    const catalogPath = collectionRoutePath(api.getEcommerceConfig()?.catalog?.entity);
+    if (hash === "/commerce" && api.hasCommerceWorkflow()) return { redirect: `#${catalogPath}` };
+    if ((hash === "/" || hash === catalogPath || hash === "/cart") && api.hasCommerceWorkflow()) {
       await import("./ob-commerce");
-      return { node: document.createElement("ob-commerce") };
+      const commerce = document.createElement("ob-commerce");
+      commerce.setAttribute("view", hash === "/cart" ? "cart" : "catalog");
+      return { node: commerce };
     }
-    if (api.hasCommerceWorkflow()) return { redirect: "#/commerce" };
+    if (api.hasCommerceWorkflow()) return { redirect: `#${catalogPath}` };
 
     const empty = document.createElement("p");
     empty.className = "empty";

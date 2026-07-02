@@ -69,6 +69,17 @@ const publicShell = `
     align-items: center;
     min-width: 0;
     gap: 12px;
+    color: inherit;
+    text-decoration: none;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+  ob-app .brand-lockup:hover {
+    text-decoration: none;
+  }
+  ob-app .brand-lockup:focus-visible {
+    outline: none;
+    box-shadow: var(--ob-shell-focus);
   }
   ob-app .brand-logo {
     width: 42px;
@@ -650,6 +661,19 @@ const commerce = `
     text-align: right;
     font-weight: 800;
     overflow-wrap: anywhere;
+  }
+  :host(ob-commerce) .payment-frame-wrap {
+    margin-top: 16px;
+    border: 1px solid var(--ob-border);
+    border-radius: var(--ob-radius);
+    overflow: hidden;
+    background: var(--ob-bg-subtle);
+  }
+  :host(ob-commerce) .payment-frame {
+    display: block;
+    width: 100%;
+    height: 360px;
+    border: 0;
   }
   :host(ob-commerce) .total-row {
     font-size: 16px;

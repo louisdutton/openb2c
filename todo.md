@@ -11,14 +11,12 @@ OpenB2C is past the initial schema-language prototype. The next priority is prov
 - Typed operation assignments, transitions, presentation metadata, policy metadata, audit metadata, cascades, and typed effects.
 - Auth context, scopes, relationship authorization, API keys, identity sessions, and certificate request auth.
 - Seed data, migrations, startup diagnostics, structured logs, and generated `.env.example`.
-- Local/fake providers plus Stripe-style payment intent, email, and webhook integration contracts.
+- Local/fake providers plus provider-neutral payment-session, email, and webhook integration contracts.
 - Browser and integration tests for generated public/private flows.
 
 ## Next: Duchy Opera Pilot
 
-- Make ticket purchase feel complete end to end in the public UI.
-- Harden payment confirmation, webhook idempotency, reservation expiry, and failure handling.
-- Add practical booking confirmation email/notification flow.
+- Add production Stripe/Adyen adapters after the local provider-neutral flow is stable.
 - Improve admin production workflows for performances, rehearsals, calls, coverage, and materials.
 - Validate generated UI on realistic data volume and mobile layouts.
 - Document the operational runbook for deploying and backing up the pilot.

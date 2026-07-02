@@ -41,11 +41,11 @@ Production startup fails when required env vars are missing. The generated serve
 - Registry keys are configured unless `ALLOW_EPHEMERAL_REGISTRY_KEYS=true`.
 - Identity OTP delivery is configured with the Resend provider when identity challenge tables are present.
 
-Secrets such as `REGISTRY_PRIVATE_KEY`, `PAYMENT_API_KEY`, email provider credentials, and webhook endpoints must come from a secret store. Keep `.env` files out of source control.
+Secrets such as `REGISTRY_PRIVATE_KEY`, payment provider credentials, email provider credentials, and webhook endpoints must come from a secret store. Keep `.env` files out of source control.
 
 The first production email provider is Resend. Generated identity challenge endpoints send OTP messages through `POST https://api.resend.com/emails` using `RESEND_API_KEY`, `EMAIL_FROM`, and an idempotency key derived from the challenge ID. `EMAIL_PROVIDER` defaults to `resend`; `RESEND_EMAILS_URL` exists only for tests or an internal proxy.
 
-Generated commerce uses a provider-neutral payment-session contract. V1 implements `PAYMENT_PROVIDER=local` and `PAYMENT_PROVIDER=fake` only; production Stripe/Adyen adapters are added explicitly once the settlement contract is stable.
+Generated commerce uses a provider-neutral payment-session contract. V1 implements `PAYMENT_PROVIDER=local` and `PAYMENT_PROVIDER=fake` only. These adapters return a `next_action` redirect to a local simulator, which posts signed provider-style events to the normal payment webhook. Production Stripe/Adyen adapters are added explicitly once the settlement contract is stable.
 Production startup rejects `EMAIL_PROVIDER=fake`, `PAYMENT_PROVIDER=fake`, and `PAYMENT_PROVIDER=local` unless `ALLOW_FAKE_PROVIDERS=true` is set for an explicit production-like test run.
 
 Declared outbound webhook effects require `WEBHOOK_URL` and `WEBHOOK_SIGNING_SECRET` in production. Generated webhook dispatch signs the exact JSON request body with HMAC-SHA256 over `<timestamp>.<body>` and sends `X-OpenB2C-Timestamp` plus `X-OpenB2C-Signature: sha256=<hex>`. Receivers should reject missing, stale, or mismatched signatures; the generated verifier uses `WEBHOOK_SIGNATURE_TOLERANCE_SECONDS` with a default of 300 seconds.

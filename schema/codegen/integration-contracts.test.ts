@@ -238,18 +238,29 @@ describe("integration provider contracts", () => {
 
       const session = await fetch(`${base}/commerce/orders/${checkedOut.order_id}/payment-session`, { method: "POST" });
       expect(session.status).toBe(201);
-      const body = await session.json() as { reference: string; client_secret: string; provider: string; status: string; payment_deadline_at: string };
+      const body = await session.json() as {
+        reference: string;
+        client_secret: string;
+        provider: string;
+        status: string;
+        payment_deadline_at: string;
+        next_action: { type: string; url: string };
+      };
       expect(body).toMatchObject({
         provider: "local",
         status: "payment_pending",
       });
       expect(body.reference).toStartWith("fake_ps_");
       expect(body.client_secret).toBe(`${body.reference}_secret`);
+      expect(body.next_action.type).toBe("redirect");
+      expect(String(body.next_action.url)).toContain("/commerce/payments/local-simulator");
       expect(Date.parse(body.payment_deadline_at)).toBeGreaterThan(Date.now());
 
       const repeated = await fetch(`${base}/commerce/orders/${checkedOut.order_id}/payment-session`, { method: "POST" });
       expect(repeated.status).toBe(201);
-      expect(await repeated.json()).toMatchObject({ reference: body.reference, provider: "local" });
+      const repeatedBody = await repeated.json();
+      expect(repeatedBody).toMatchObject({ reference: body.reference, provider: "local" });
+      expect(repeatedBody.next_action).toEqual(body.next_action);
     } finally {
       server?.stop(true);
       clearEnv();
