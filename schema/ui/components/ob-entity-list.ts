@@ -67,7 +67,8 @@ export class ObEntityList extends HTMLElement {
     const filterFields = filterableSchemaFields(inputSchema || schema, fks);
     const sortableFields = new Set(["id", ...Object.keys(inputSchema?.properties || {})]);
     if (this._sort && !sortableFields.has(this._sort)) this._sort = "";
-    const filterOptions = await this._loadFilterOptions(filterFields, fks, api);
+    const lookupFields = Object.keys(fks).map((field) => [field, (inputSchema || schema).properties?.[field] || schema.properties?.[field] || {}]) as [string, any][];
+    const lookupOptions = await this._loadFilterOptions(lookupFields, fks, api);
 
     const params = new URLSearchParams();
     params.set("limit", String(this._limit));
@@ -125,7 +126,7 @@ export class ObEntityList extends HTMLElement {
       ${this._error ? `<div class="error-msg" role="alert">${escapeHtml(this._error)}</div>` : ""}
       ${filterFields.length > 0 ? `
         <form class="filter-bar" aria-label="${escapeAttr(pluralDisplayName(this.entity))} filters">
-          ${filterFields.map(([field, prop]) => this._renderFilterControl(field, prop, fks, relationships, filterOptions)).join("")}
+          ${filterFields.map(([field, prop]) => this._renderFilterControl(field, prop, fks, relationships, lookupOptions)).join("")}
           <div class="filter-actions">
             <button type="button" data-action="clear-filters" ${activeFilterCount === 0 ? "disabled" : ""}>Clear</button>
           </div>
@@ -154,7 +155,7 @@ export class ObEntityList extends HTMLElement {
             ${items.length === 0 ? `<tr><td colspan="${cols.length + 1}"><div class="empty-state"><strong>${escapeHtml(emptyState.title)}</strong><span>${escapeHtml(emptyState.body)}</span>${emptyState.action}</div></td></tr>` : ""}
             ${items.map((row: any) => `
               <tr data-id="${escapeAttr(row.id)}">
-                ${cols.map(([c, prop]) => this._renderCell(c, row[c], fks, prop, api, relationships[c], filterOptions[c] || [], c === primaryColumn ? rowHref(row) : "")).join("")}
+                ${cols.map(([c, prop]) => this._renderCell(c, row[c], fks, prop, api, relationships[c], lookupOptions[c] || [], c === primaryColumn ? rowHref(row) : "")).join("")}
                 <td><a class="row-action" href="${escapeAttr(rowHref(row))}">Open</a></td>
               </tr>
             `).join("")}
@@ -319,15 +320,18 @@ export class ObEntityList extends HTMLElement {
     }
 
     const formatted = formatValue(column, value, prop);
-    if (href) {
-      return `<td><a class="record-link" title="${escapeAttr(formatted)}" href="${escapeAttr(href)}">${escapeHtml(formatted)}</a></td>`;
-    }
-
     if (fks[column]) {
       const targetHref = recordHref(api, fks[column], value);
       const label = lookupLabelFor(value, lookupRows, relationship);
       const title = label === `#${value}` ? label : `${label} (#${value})`;
+      if (href) {
+        return `<td><a class="record-link" title="${escapeAttr(title)}" href="${escapeAttr(href)}">${escapeHtml(label)}</a></td>`;
+      }
       return `<td><a class="cell-link" title="${escapeAttr(title)}" href="${escapeAttr(targetHref)}">${escapeHtml(label)}</a></td>`;
+    }
+
+    if (href) {
+      return `<td><a class="record-link" title="${escapeAttr(formatted)}" href="${escapeAttr(href)}">${escapeHtml(formatted)}</a></td>`;
     }
 
     const badgeClass = statusClass(column, value);

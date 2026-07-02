@@ -313,7 +313,17 @@ function variantFields(schema: Schema, entity: string, label: FieldRef | null): 
       const format = col.metadata?.format || "";
       return format === "date" || format === "time" || format === "date-time" || field.endsWith("_at");
     })
+    .sort(([aField, aCol], [bField, bCol]) => variantFieldPriority(aField, aCol) - variantFieldPriority(bField, bCol))
     .map(([field]) => refFor(schema.tables, entity, field));
+}
+
+function variantFieldPriority(field: string, col: Column): number {
+  if (["starts_at", "start_at", "starts_on", "start_date", "date", "scheduled_at"].includes(field)) return 10;
+  if (["starts_time", "start_time", "time"].includes(field)) return 15;
+  if (["ends_at", "end_at", "ends_on", "end_date"].includes(field)) return 20;
+  if (["ends_time", "end_time"].includes(field)) return 25;
+  if (parseReference(col.references)) return 30;
+  return 40;
 }
 
 function availability(schema: Schema, entity: string): { field: FieldRef | null; available: string } {
