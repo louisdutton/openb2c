@@ -10,15 +10,6 @@ export interface ColumnMetadata {
   redact?: boolean;
 }
 
-export interface ColumnValidation {
-  minLength?: number | null;
-  maxLength?: number | null;
-  minimum?: number | null;
-  maximum?: number | null;
-  pattern?: string | null;
-  enum?: string[];
-}
-
 export type RelationshipCardinality = "one" | "many";
 
 export interface FieldRef {
@@ -33,6 +24,23 @@ export interface ColumnRelationshipMetadata {
   cardinality?: RelationshipCardinality;
 }
 
+export interface ColumnLengthConstraint {
+  min?: number | null;
+  max?: number | null;
+}
+
+export interface ColumnRangeConstraint {
+  min?: number | null;
+  max?: number | null;
+}
+
+export interface ColumnConstraints {
+  enum?: string[];
+  pattern?: string | null;
+  length?: ColumnLengthConstraint;
+  range?: ColumnRangeConstraint;
+}
+
 export interface Column {
   type: string;
   pk: boolean;
@@ -42,7 +50,7 @@ export interface Column {
   default: string | null;
   references: string | null;
   metadata?: ColumnMetadata;
-  validation?: ColumnValidation;
+  constraints?: ColumnConstraints;
   relationship?: ColumnRelationshipMetadata | null;
 }
 
@@ -79,19 +87,45 @@ export interface Expr {
   [key: string]: unknown;
 }
 
-export type ConstraintKind = "unique" | "check";
+export type ConstraintKind = "unique" | "check" | "enum" | "pattern" | "length" | "range";
 export type ConstraintEnforcement = "auto" | "database" | "application" | "both";
 
-export interface Constraint {
-  kind: ConstraintKind;
+export interface UniqueConstraint {
   fields: FieldRef[];
-  expression?: Expr | null;
   condition?: Expr | null;
-  message?: string | null;
   enforcement?: ConstraintEnforcement;
 }
 
-export type Constraints = Record<string, Record<string, Constraint>>;
+export interface CheckConstraint {
+  fields: FieldRef[];
+  expression: Expr;
+  condition?: Expr | null;
+  enforcement?: ConstraintEnforcement;
+}
+
+export type Constraint = UniqueConstraint | CheckConstraint;
+
+export interface ConstraintGroup {
+  unique?: Record<string, UniqueConstraint>;
+  check?: Record<string, CheckConstraint>;
+}
+
+export type Constraints = Record<string, ConstraintGroup>;
+
+export interface NormalizedConstraint {
+  kind: ConstraintKind;
+  fields: FieldRef[];
+  field?: FieldRef;
+  expression?: Expr | null;
+  condition?: Expr | null;
+  enforcement?: ConstraintEnforcement;
+  values?: string[];
+  regex?: string;
+  min?: number | null;
+  max?: number | null;
+}
+
+export type NormalizedConstraints = Record<string, Record<string, NormalizedConstraint>>;
 
 export interface Cascade {
   entity: string;

@@ -1,6 +1,10 @@
 { config, lib, ... }:
 let
   E = import ../lib/expr.nix;
+  F = config.refs.issue;
+  V = config.values.issue;
+  project = config.entityRefs.project;
+  projectStatus = config.values.project.status;
 in
 {
   tables.issue = {
@@ -16,9 +20,21 @@ in
     number = { type = "integer"; required = true; };  # Project-scoped issue number
     name = { type = "text"; required = true; };
     description = { type = "text"; };
-    type = { type = "text"; default = "'task'"; };  # task, bug, feature, epic
-    status = { type = "text"; default = "'todo'"; };  # todo, in_progress, in_review, done, cancelled
-    priority = { type = "text"; default = "'medium'"; };  # low, medium, high, urgent
+    type = {
+      type = "text";
+      default = "'task'";
+      constraints.enum = [ "task" "bug" "feature" "epic" ];
+    };
+    status = {
+      type = "text";
+      default = "'todo'";
+      constraints.enum = [ "todo" "in_progress" "in_review" "done" "cancelled" ];
+    };
+    priority = {
+      type = "text";
+      default = "'medium'";
+      constraints.enum = [ "low" "medium" "high" "urgent" ];
+    };
     creator_id = {
       type = "integer";
       required = true;
@@ -53,18 +69,20 @@ in
       workflow = {
         group = "issueWorkflow";
         transitions = [{
-          field = config.refs.issue.status;
-          from = [ "todo" ];
-          to = "in_progress";
+          field = F.status;
+          from = [ V.status.todo ];
+          to = V.status.in_progress;
         }];
         audit.summary = "Started issue";
       };
       guard = E.and
         (E.and
-          (E.eq (E.f "status") (E.lit "todo"))
-          (E.notNull (E.f "assignee_id")))
-        (E.eq (E.rel "project" "status") (E.lit "active"));
-      set = { status = "in_progress"; };
+          (E.eq (E.f F.status) (E.lit V.status.todo))
+          (E.notNull (E.f F.assignee_id)))
+        (E.eq (E.rel project config.refs.project.status) (E.lit projectStatus.active));
+      set = [
+        { field = F.status; value = V.status.in_progress; }
+      ];
       effects = [
         { notify = { channel = "email"; template = "issue_started"; }; }
       ];
@@ -74,14 +92,16 @@ in
       workflow = {
         group = "issueWorkflow";
         transitions = [{
-          field = config.refs.issue.status;
-          from = [ "in_progress" ];
-          to = "in_review";
+          field = F.status;
+          from = [ V.status.in_progress ];
+          to = V.status.in_review;
         }];
         audit.summary = "Submitted issue for review";
       };
-      guard = E.eq (E.f "status") (E.lit "in_progress");
-      set = { status = "in_review"; };
+      guard = E.eq (E.f F.status) (E.lit V.status.in_progress);
+      set = [
+        { field = F.status; value = V.status.in_review; }
+      ];
       effects = [
         { notify = { channel = "email"; template = "issue_review_requested"; }; }
       ];
@@ -91,16 +111,18 @@ in
       workflow = {
         group = "issueWorkflow";
         transitions = [{
-          field = config.refs.issue.status;
-          from = [ "in_review" "in_progress" ];
-          to = "done";
+          field = F.status;
+          from = with V.status; [ in_review in_progress ];
+          to = V.status.done;
         }];
         audit.summary = "Completed issue";
       };
       guard = E.or
-        (E.eq (E.f "status") (E.lit "in_review"))
-        (E.eq (E.f "status") (E.lit "in_progress"));
-      set = { status = "done"; };
+        (E.eq (E.f F.status) (E.lit V.status.in_review))
+        (E.eq (E.f F.status) (E.lit V.status.in_progress));
+      set = [
+        { field = F.status; value = V.status.done; }
+      ];
       effects = [
         { emit = "issue.completed"; }
       ];
@@ -110,9 +132,9 @@ in
       workflow = {
         group = "issueWorkflow";
         transitions = [{
-          field = config.refs.issue.status;
-          from = [ "todo" "in_progress" "in_review" ];
-          to = "cancelled";
+          field = F.status;
+          from = with V.status; [ todo in_progress in_review ];
+          to = V.status.cancelled;
         }];
         audit.summary = "Cancelled issue";
         confirmation = {
@@ -124,25 +146,29 @@ in
         };
       };
       guard = E.and
-        (E.ne (E.f "status") (E.lit "done"))
-        (E.ne (E.f "status") (E.lit "cancelled"));
-      set = { status = "cancelled"; };
+        (E.ne (E.f F.status) (E.lit V.status.done))
+        (E.ne (E.f F.status) (E.lit V.status.cancelled));
+      set = [
+        { field = F.status; value = V.status.cancelled; }
+      ];
     };
 
     reopen = {
       workflow = {
         group = "issueWorkflow";
         transitions = [{
-          field = config.refs.issue.status;
-          from = [ "done" "cancelled" ];
-          to = "todo";
+          field = F.status;
+          from = with V.status; [ done cancelled ];
+          to = V.status.todo;
         }];
         audit.summary = "Reopened issue";
       };
       guard = E.or
-        (E.eq (E.f "status") (E.lit "done"))
-        (E.eq (E.f "status") (E.lit "cancelled"));
-      set = { status = "todo"; };
+        (E.eq (E.f F.status) (E.lit V.status.done))
+        (E.eq (E.f F.status) (E.lit V.status.cancelled));
+      set = [
+        { field = F.status; value = V.status.todo; }
+      ];
     };
 
     assign = {
@@ -157,8 +183,8 @@ in
         audit.summary = "Assigned issue";
       };
       guard = E.and
-        (E.ne (E.f "status") (E.lit "done"))
-        (E.ne (E.f "status") (E.lit "cancelled"));
+        (E.ne (E.f F.status) (E.lit V.status.done))
+        (E.ne (E.f F.status) (E.lit V.status.cancelled));
       set = { };  # assignee_id set via parameters
       effects = [
         { notify = { channel = "email"; template = "issue_assigned"; }; }
@@ -184,9 +210,11 @@ in
         };
       };
       guard = E.and
-        (E.ne (E.f "priority") (E.lit "urgent"))
-        (E.ne (E.f "status") (E.lit "done"));
-      set = { priority = "urgent"; };
+        (E.ne (E.f F.priority) (E.lit V.priority.urgent))
+        (E.ne (E.f F.status) (E.lit V.status.done));
+      set = [
+        { field = F.priority; value = V.priority.urgent; }
+      ];
       effects = [
         { notify = { channel = "email"; template = "issue_escalated"; }; }
       ];

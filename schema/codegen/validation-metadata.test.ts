@@ -37,45 +37,45 @@ function validationSchema(): Schema {
         id: col({ type: "integer", pk: true, auto: true }),
         ticket_type: col({
           default: "'standard'",
-          validation: { enum: ["standard", "vip"] },
+          constraints: { enum: ["standard", "vip"] },
         }),
         price_pence: col({
           type: "integer",
           required: true,
-          validation: { minimum: 0, maximum: 100000 },
+          constraints: { range: { min: 0, max: 100000 } },
         }),
       },
     },
     constraints: {
       ticket: {
-        unique_ticket_type: {
-          kind: "unique",
-          fields: [{ table: "ticket", field: "ticket_type", references: null }],
-          message: "Ticket type must be unique.",
+        unique: {
+          unique_ticket_type: {
+            fields: [{ table: "ticket", field: "ticket_type", references: null }],
+          },
         },
-        vip_price_minimum: {
-          kind: "check",
-          fields: [
-            { table: "ticket", field: "ticket_type", references: null },
-            { table: "ticket", field: "price_pence", references: null },
-          ],
-          expression: {
-            _t: "bin",
-            op: "||",
-            left: {
+        check: {
+          vip_price_minimum: {
+            fields: [
+              { table: "ticket", field: "ticket_type", references: null },
+              { table: "ticket", field: "price_pence", references: null },
+            ],
+            expression: {
               _t: "bin",
-              op: "!=",
-              left: { _t: "field", name: "ticket_type" },
-              right: { _t: "lit", value: "vip" },
-            },
-            right: {
-              _t: "bin",
-              op: ">=",
-              left: { _t: "field", name: "price_pence" },
-              right: { _t: "lit", value: 2500 },
+              op: "||",
+              left: {
+                _t: "bin",
+                op: "!=",
+                left: { _t: "field", name: "ticket_type" },
+                right: { _t: "lit", value: "vip" },
+              },
+              right: {
+                _t: "bin",
+                op: ">=",
+                left: { _t: "field", name: "price_pence" },
+                right: { _t: "lit", value: 2500 },
+              },
             },
           },
-          message: "VIP tickets must cost at least GBP 25.00.",
         },
       },
     },
@@ -107,7 +107,7 @@ describe("validation metadata generation", () => {
         { table: "ticket", field: "ticket_type", references: null },
         { table: "ticket", field: "price_pence", references: null },
       ],
-      message: "VIP tickets must cost at least GBP 25.00.",
+      message: "VIP price minimum constraint failed.",
       enforcement: "auto",
     });
   });
@@ -123,7 +123,7 @@ describe("validation metadata generation", () => {
     db.exec(genSQL(schema.tables, schema.constraints));
 
     try {
-      expect(services.createTicket(db, { ticket_type: "vip", price_pence: 2000 }).error).toBe("VIP tickets must cost at least GBP 25.00.");
+      expect(services.createTicket(db, { ticket_type: "vip", price_pence: 2000 }).error).toBe("VIP price minimum constraint failed.");
       expect(services.createTicket(db, { ticket_type: "vip", price_pence: 2500 }).ok).toBe(true);
     } finally {
       db.close();
@@ -132,27 +132,22 @@ describe("validation metadata generation", () => {
 
   test("validates malformed logical constraints", () => {
     const schema = validationSchema();
-    schema.constraints!.ticket.vip_price_minimum.fields = [
+    schema.constraints!.ticket.check!.vip_price_minimum.fields = [
       { table: "ticket", field: "ticket_type", references: null },
     ];
-    schema.constraints!.ticket.vip_price_minimum.expression = { _t: "field", name: "missing" };
-    schema.constraints!.ticket.unique_ticket_type.expression = { _t: "field", name: "ticket_type" };
-    schema.constraints!.ticket.related = {
-      kind: "check",
+    schema.constraints!.ticket.check!.vip_price_minimum.expression = { _t: "field", name: "missing" };
+    schema.constraints!.ticket.check!.related = {
       fields: [
         { table: "ticket", field: "ticket_type", references: null },
         { table: "ticket", field: "price_pence", references: null },
       ],
       expression: { _t: "rel", entity: "user", field: "email" },
-      message: "",
     } as any;
 
     expect(validateSchema(schema)).toEqual(expect.arrayContaining([
-      expect.objectContaining({ path: "constraints.ticket.vip_price_minimum.expression.name" }),
-      expect.objectContaining({ path: "constraints.ticket.vip_price_minimum.fields" }),
-      expect.objectContaining({ path: "constraints.ticket.unique_ticket_type.expression" }),
-      expect.objectContaining({ path: "constraints.ticket.related.expression" }),
-      expect.objectContaining({ path: "constraints.ticket.related.message" }),
+      expect.objectContaining({ path: "constraints.ticket.check.vip_price_minimum.expression.name" }),
+      expect.objectContaining({ path: "constraints.ticket.check.vip_price_minimum.fields" }),
+      expect.objectContaining({ path: "constraints.ticket.check.related.expression" }),
     ]));
   });
 });

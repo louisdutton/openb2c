@@ -1,6 +1,7 @@
 { config, lib, ... }:
 let
   E = import ../lib/expr.nix;
+  F = config.refs.api_key;
 in {
   tables.api_key = {
     id = { type = "integer"; pk = true; auto = true; };
@@ -42,7 +43,7 @@ in {
         placeholder = "Mobile app";
         displayPriority = 30;
       };
-      validation.maxLength = 120;
+      constraints.length.max = 120;
     };
     scopes = {
       type = "text";
@@ -62,7 +63,7 @@ in {
         label = "Active";
         displayPriority = 50;
       };
-      validation.enum = [ "0" "1" ];
+      constraints.enum = [ "0" "1" ];
     };
     created_at = {
       type = "text";
@@ -97,8 +98,11 @@ in {
 
   operations.api_key = {
     revoke = {
-      guard = E.eq (E.f "active") (E.lit 1);
-      set = { active = "0"; };
+      guard = E.eq (E.f F.active) (E.lit 1);
+      set = [
+        { field = F.active; value = "0"; }
+      ];
     };
   };
+
 }

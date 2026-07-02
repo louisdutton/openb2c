@@ -1,17 +1,25 @@
 # Expression AST builders
-# Usage: E.eq (E.f "status") (E.lit "pending")
+# Usage: E.eq (E.f config.refs.ticket.status) (E.lit config.values.ticket.status.pending)
 # Exports to JSON AST that codegen compiles to target language
 
-{
+let
+  fieldName = ref: if builtins.isAttrs ref && ref ? field then ref.field else ref;
+  tableName = ref: if builtins.isAttrs ref && ref ? table then ref.table else ref;
+in {
   # Field reference (local entity)
-  f = name: { _t = "field"; inherit name; };
-  field = name: { _t = "field"; inherit name; };
+  f = ref: { _t = "field"; name = fieldName ref; };
+  field = ref: { _t = "field"; name = fieldName ref; };
 
   # Related entity field (via FK)
-  rel = entity: field: { _t = "rel"; inherit entity field; };
+  rel = entity: ref: { _t = "rel"; entity = tableName entity; field = fieldName ref; };
 
   # Related entity through junction table
-  relVia = entity: via: field: { _t = "rel"; inherit entity via field; };
+  relVia = entity: via: ref: {
+    _t = "rel";
+    entity = tableName entity;
+    via = tableName via;
+    field = fieldName ref;
+  };
 
   # Literal value
   lit = value: { _t = "lit"; inherit value; };
@@ -41,7 +49,7 @@
 
   # Aggregations on related collections
   count = rel: { _t = "agg"; op = "count"; inherit rel; };
-  sum = rel: field: { _t = "agg"; op = "sum"; inherit rel field; };
+  sum = rel: ref: { _t = "agg"; op = "sum"; inherit rel; field = fieldName ref; };
   any = rel: pred: { _t = "agg"; op = "any"; inherit rel pred; };
   all = rel: pred: { _t = "agg"; op = "all"; inherit rel pred; };
 

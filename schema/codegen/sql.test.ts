@@ -179,37 +179,37 @@ describe("genSQL", () => {
     };
     const constraints: Constraints = {
       ticket: {
-        unique_performance_seat: {
-          kind: "unique",
-          fields: [
-            { table: "ticket", field: "performance_id", references: null },
-            { table: "ticket", field: "seat", references: null },
-          ],
-          message: "Seat must be unique per performance.",
+        unique: {
+          unique_performance_seat: {
+            fields: [
+              { table: "ticket", field: "performance_id", references: null },
+              { table: "ticket", field: "seat", references: null },
+            ],
+          },
         },
-        vip_price_minimum: {
-          kind: "check",
-          fields: [
-            { table: "ticket", field: "ticket_type", references: null },
-            { table: "ticket", field: "price_pence", references: null },
-          ],
-          expression: {
-            _t: "bin",
-            op: "||",
-            left: {
+        check: {
+          vip_price_minimum: {
+            fields: [
+              { table: "ticket", field: "ticket_type", references: null },
+              { table: "ticket", field: "price_pence", references: null },
+            ],
+            expression: {
               _t: "bin",
-              op: "!=",
-              left: { _t: "field", name: "ticket_type" },
-              right: { _t: "lit", value: "vip" },
-            },
-            right: {
-              _t: "bin",
-              op: ">=",
-              left: { _t: "field", name: "price_pence" },
-              right: { _t: "lit", value: 2500 },
+              op: "||",
+              left: {
+                _t: "bin",
+                op: "!=",
+                left: { _t: "field", name: "ticket_type" },
+                right: { _t: "lit", value: "vip" },
+              },
+              right: {
+                _t: "bin",
+                op: ">=",
+                left: { _t: "field", name: "price_pence" },
+                right: { _t: "lit", value: 2500 },
+              },
             },
           },
-          message: "VIP tickets must cost at least GBP 25.00.",
         },
       },
     };
@@ -229,14 +229,15 @@ describe("genSQL", () => {
     };
     const constraints: Constraints = {
       booking: {
-        unique_paid_reference: {
-          kind: "unique",
-          fields: [{ table: "booking", field: "payment_reference", references: null }],
-          condition: {
-            _t: "bin",
-            op: "==",
-            left: { _t: "field", name: "status" },
-            right: { _t: "lit", value: "paid" },
+        unique: {
+          unique_paid_reference: {
+            fields: [{ table: "booking", field: "payment_reference", references: null }],
+            condition: {
+              _t: "bin",
+              op: "==",
+              left: { _t: "field", name: "status" },
+              right: { _t: "lit", value: "paid" },
+            },
           },
         },
       },
@@ -256,18 +257,20 @@ describe("genSQL", () => {
 
     expect(() => genSQL(tables, {
       missing: {
-        unique_id: {
-          kind: "unique",
-          fields: [{ table: "missing", field: "id", references: null }],
+        unique: {
+          unique_id: {
+            fields: [{ table: "missing", field: "id", references: null }],
+          },
         },
       },
     })).toThrow("Constraint configured for non-existent table: missing");
 
     expect(() => genSQL(tables, {
       ticket: {
-        unique_missing: {
-          kind: "unique",
-          fields: [{ table: "ticket", field: "missing_id", references: null }],
+        unique: {
+          unique_missing: {
+            fields: [{ table: "ticket", field: "missing_id", references: null }],
+          },
         },
       },
     })).toThrow("Constraint unique_missing on ticket references non-existent column: missing_id");

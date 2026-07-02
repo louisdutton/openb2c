@@ -47,12 +47,12 @@ function metadataSchema(): Schema {
             format: "email",
             displayPriority: 10,
           },
-          validation: { minLength: 5, maxLength: 120 },
+          constraints: { length: { min: 5, max: 120 } },
         }),
         name: col({
           required: true,
           metadata: { label: "Full name", displayPriority: 20 },
-          validation: { minLength: 1, maxLength: 80 },
+          constraints: { length: { min: 1, max: 80 } },
         }),
         bio: col({
           metadata: { label: "Biography", format: "textarea", displayPriority: 25 },
@@ -60,12 +60,12 @@ function metadataSchema(): Schema {
         status: col({
           default: "'active'",
           metadata: { label: "Status", displayPriority: 30 },
-          validation: { enum: ["active", "disabled"] },
+          constraints: { enum: ["active", "disabled"] },
         }),
         age: col({
           type: "integer",
           metadata: { label: "Age", displayPriority: 40 },
-          validation: { minimum: 13, maximum: 120 },
+          constraints: { range: { min: 13, max: 120 } },
         }),
         secret_token: col({
           metadata: {
@@ -87,7 +87,7 @@ function metadataSchema(): Schema {
 }
 
 describe("field metadata generation", () => {
-  test("threads metadata and validation rules into OpenAPI schemas", () => {
+  test("threads metadata and constraint rules into OpenAPI schemas", () => {
     const openapi = JSON.parse(genOpenAPI(metadataSchema()));
     const input = openapi.components.schemas.UserInput.properties;
 
@@ -154,7 +154,7 @@ describe("field metadata generation", () => {
     expect(labelFor({ id: 2, starts_at: "2026-06-27T19:30:00Z" })).toBe("27 Jun 2026 at 19:30");
   });
 
-  test("generated services enforce per-field validation metadata", async () => {
+  test("generated services enforce per-field constraints", async () => {
     const schema = metadataSchema();
     const dir = mkdtempSync(join(tmpdir(), "openb2c-field-metadata-"));
     writeFileSync(join(dir, "types.ts"), genTypes(schema.tables, schema.operations));
@@ -236,13 +236,13 @@ describe("field metadata generation", () => {
 
   test("validates malformed metadata rules before generation", () => {
     const schema = metadataSchema();
-    schema.tables.user.age.validation = { minimum: 120, maximum: 13 };
-    schema.tables.user.email.validation = { pattern: "[" };
+    schema.tables.user.age.constraints = { range: { min: 120, max: 13 } };
+    schema.tables.user.email.constraints = { pattern: "[" };
     schema.tables.user.status.metadata = { privacy: "private" as any };
 
     expect(validateSchema(schema)).toEqual(expect.arrayContaining([
-      expect.objectContaining({ path: "tables.user.age.validation" }),
-      expect.objectContaining({ path: "tables.user.email.validation.pattern" }),
+      expect.objectContaining({ path: "tables.user.age.constraints.range" }),
+      expect.objectContaining({ path: "tables.user.email.constraints.pattern" }),
       expect.objectContaining({ path: "tables.user.status.metadata.privacy" }),
     ]));
   });

@@ -1,6 +1,8 @@
 { config, lib, ... }:
 let
   E = import ../lib/expr.nix;
+  F = config.refs.project;
+  V = config.values.project;
 in
 {
   tables.project = {
@@ -17,14 +19,16 @@ in
         description = "User accountable for this project.";
       };
     };
-    status = { type = "text"; default = "'active'"; };  # active, archived
+    status = {
+      type = "text";
+      default = "'active'";
+      constraints.enum = [ "active" "archived" ];
+    };
     created_at = { type = "text"; default = "CURRENT_TIMESTAMP"; };
   };
 
-  constraints.project.unique_key = {
-    kind = "unique";
-    fields = [ config.refs.project.key ];
-    message = "Project key must be unique.";
+  constraints.project.unique.unique_key = {
+    fields = with config.refs.project; [ key ];
   };
 
   operations.project = {
@@ -33,13 +37,17 @@ in
     update.relationships = [ "owner" ];
 
     archive = {
-      guard = E.eq (E.f "status") (E.lit "active");
-      set = { status = "archived"; };
+      guard = E.eq (E.f F.status) (E.lit V.status.active);
+      set = [
+        { field = F.status; value = V.status.archived; }
+      ];
     };
 
     unarchive = {
-      guard = E.eq (E.f "status") (E.lit "archived");
-      set = { status = "active"; };
+      guard = E.eq (E.f F.status) (E.lit V.status.archived);
+      set = [
+        { field = F.status; value = V.status.active; }
+      ];
     };
   };
 }

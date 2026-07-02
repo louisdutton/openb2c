@@ -1,6 +1,10 @@
 { config, lib, ... }:
 let
   E = import ../lib/expr.nix;
+  F = config.refs.performance;
+  V = config.values.performance;
+  ticket = config.refs.ticket;
+  ticketStatus = config.values.ticket.status;
 in
 {
   tables.performance = {
@@ -46,7 +50,7 @@ in
         format = "money";
         displayPriority = 50;
       };
-      validation.minimum = 0;
+      constraints.range.min = 0;
     };
     description = {
       type = "text";
@@ -63,7 +67,7 @@ in
         label = "Status";
         displayPriority = 70;
       };
-      validation.enum = [ "scheduled" "cancelled" "completed" ];
+      constraints.enum = [ "scheduled" "cancelled" "completed" ];
     };
     created_at = {
       type = "text";
@@ -76,14 +80,12 @@ in
     };
   };
 
-  constraints.performance.ends_after_start = {
-    kind = "check";
-    fields = [
-      config.refs.performance.starts_at
-      config.refs.performance.ends_at
+  constraints.performance.check.ends_after_start = {
+    fields = with config.refs.performance; [
+      starts_at
+      ends_at
     ];
-    expression = E.lt (E.f "starts_at") (E.f "ends_at");
-    message = "Performance end time must be after the start time.";
+    expression = E.lt (E.f F.starts_at) (E.f F.ends_at);
   };
 
   audit.entities.performance = {
@@ -114,13 +116,11 @@ in
     role_in_performance = { type = "text"; };  # Character name or role
   };
 
-  constraints.performance_artist.unique_pair = {
-    kind = "unique";
-    fields = [
-      config.refs.performance_artist.performance_id
-      config.refs.performance_artist.user_id
+  constraints.performance_artist.unique.unique_pair = {
+    fields = with config.refs.performance_artist; [
+      performance_id
+      user_id
     ];
-    message = "An artist can only be assigned once to the same performance.";
   };
 
   workflows.groups.performanceLifecycle = {
@@ -155,9 +155,9 @@ in
       workflow = {
         group = "performanceLifecycle";
         transitions = [{
-          field = config.refs.performance.status;
-          from = [ "scheduled" ];
-          to = "cancelled";
+          field = F.status;
+          from = [ V.status.scheduled ];
+          to = V.status.cancelled;
         }];
         audit.summary = "Cancelled performance";
         audit.detail = "Cancelled the performance and cascaded cancellation to related tickets.";
@@ -169,12 +169,16 @@ in
           severity = "danger";
         };
       };
-      guard = E.eq (E.f "status") (E.lit "scheduled");
-      set = { status = "cancelled"; };
+      guard = E.eq (E.f F.status) (E.lit V.status.scheduled);
+      set = [
+        { field = F.status; value = V.status.cancelled; }
+      ];
       cascade = [{
         entity = "ticket";
         via = "performance_id";
-        set = { status = "cancelled"; };
+        set = [
+          { field = ticket.status; value = ticketStatus.cancelled; }
+        ];
       }];
       effects = [
         { notify = { channel = "email"; template = "performance_cancelled"; to = "ticket_holders"; }; }
@@ -189,14 +193,16 @@ in
       workflow = {
         group = "performanceLifecycle";
         transitions = [{
-          field = config.refs.performance.status;
-          from = [ "scheduled" ];
-          to = "completed";
+          field = F.status;
+          from = [ V.status.scheduled ];
+          to = V.status.completed;
         }];
         audit.summary = "Completed performance";
       };
-      guard = E.eq (E.f "status") (E.lit "scheduled");
-      set = { status = "completed"; };
+      guard = E.eq (E.f F.status) (E.lit V.status.scheduled);
+      set = [
+        { field = F.status; value = V.status.completed; }
+      ];
     };
 
     reschedule = {
@@ -221,7 +227,7 @@ in
           severity = "warning";
         };
       };
-      guard = E.eq (E.f "status") (E.lit "scheduled");
+      guard = E.eq (E.f F.status) (E.lit V.status.scheduled);
       # Note: actual start/end datetimes come from input, not hardcoded.
       set = {};  # Fields set from input
       effects = [

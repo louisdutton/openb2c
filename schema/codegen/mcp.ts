@@ -1,4 +1,5 @@
 import type { Column, Operation, Schema } from "./types";
+import { fieldConstraintRules, type FieldConstraintRule } from "./constraints";
 import { getAppMetadata, hasCommerceWorkflow, hasCommerceBookingAliases, pascalCase, camelCase } from "./utils";
 
 const CRUD_ACTIONS = new Set(["read", "create", "update", "delete"]);
@@ -45,13 +46,12 @@ function coerceSchemaValue(value: string, col: Column): string | number | boolea
   return value;
 }
 
-function inputFieldSchema(field: string, col: Column): Record<string, unknown> {
+function inputFieldSchema(field: string, col: Column, validation: FieldConstraintRule = {}): Record<string, unknown> {
   const schema: Record<string, unknown> = {
     type: mcpJsonType(col),
     title: fieldLabel(field, col),
     description: fieldDescription(field, col),
   };
-  const validation = col.validation || {};
   if (col.metadata?.format) schema.format = col.metadata.format;
   if (validation.enum?.length) schema.enum = validation.enum.map(value => coerceSchemaValue(value, col));
   if (validation.minLength !== null && validation.minLength !== undefined) schema.minLength = validation.minLength;
@@ -75,11 +75,11 @@ function idInputSchema(entity: string): Record<string, unknown> {
   };
 }
 
-function listInputSchema(cols: Record<string, Column>): Record<string, unknown> {
+function listInputSchema(cols: Record<string, Column>, rules: Record<string, FieldConstraintRule> = {}): Record<string, unknown> {
   const visibleFields = Object.entries(cols).filter(([, col]) => !isHiddenMcpField(col));
   const fieldNames = visibleFields.map(([field]) => field);
   const filterProps = Object.fromEntries(
-    visibleFields.map(([field, col]) => [field, inputFieldSchema(field, col)])
+    visibleFields.map(([field, col]) => [field, inputFieldSchema(field, col, rules[field])])
   );
   return {
     type: "object",
@@ -256,6 +256,7 @@ function toolExtraFields(
 
 export function genMcpServer(schema: Schema): string {
   const app = getAppMetadata(schema);
+  const constraintRules = fieldConstraintRules(schema.tables, schema.constraints);
   const supportsApiKeys = Boolean(schema.tables.api_key);
   const entities = Object.keys(schema.tables);
   const tools: string[] = [];
@@ -266,6 +267,7 @@ export function genMcpServer(schema: Schema): string {
     const Entity = pascalCase(entity);
     const cols = schema.tables[entity];
     const ops = schema.operations[entity] || {};
+    const entityRules = constraintRules[entity] || {};
     const createRelationshipFields = new Set(
       (ops.create?.relationships ?? [])
         .filter(rel => rel.field.table === entity)
@@ -278,7 +280,7 @@ export function genMcpServer(schema: Schema): string {
     for (const [col, c] of Object.entries(cols)) {
       if (c.pk && c.auto) continue;
       if (isHiddenMcpField(c)) continue;
-      inputProps[col] = inputFieldSchema(col, c);
+      inputProps[col] = inputFieldSchema(col, c, entityRules[col]);
       if (c.required && c.default === null && !createRelationshipFields.has(col)) requiredProps.push(col);
     }
 
@@ -293,7 +295,7 @@ export function genMcpServer(schema: Schema): string {
     tools.push(`    {
       name: "list_${entity}s",
       description: ${JSON.stringify(listDescription)},
-${listExtras}      inputSchema: ${JSON.stringify(listInputSchema(cols))},
+${listExtras}      inputSchema: ${JSON.stringify(listInputSchema(cols, entityRules))},
     }`);
     toolAuthz.push(`  "list_${entity}s": { entity: "${entity}", action: "read" }`);
     handlers.push(`      case "list_${entity}s":

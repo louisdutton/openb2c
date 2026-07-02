@@ -46,15 +46,11 @@
     revoked = { type = "integer"; required = false; default = "0"; };
   };
 
-  constraints.identity_registry.unique_email = {
-    kind = "unique";
-    fields = [ config.refs.identity_registry.email ];
-    message = "Identity email must be unique.";
+  constraints.identity_registry.unique.unique_email = {
+    fields = with config.refs.identity_registry; [ email ];
   };
 
-  constraints.identity_request_signature.unique_signature = {
-    kind = "unique";
-    fields = [ config.refs.identity_request_signature.signature ];
-    message = "Request signature must be unique.";
+  constraints.identity_request_signature.unique.unique_signature = {
+    fields = with config.refs.identity_request_signature; [ signature ];
   };
 }

@@ -1,6 +1,7 @@
 { config, lib, ... }:
 let
   E = import ../lib/expr.nix;
+  F = config.refs.venue;
 in
 {
   tables.venue = {
@@ -18,13 +19,17 @@ in
     read.public = true;
 
     deactivate = {
-      guard = E.eq (E.f "active") (E.lit 1);
-      set = { active = "0"; };
+      guard = E.eq (E.f F.active) (E.lit 1);
+      set = [
+        { field = F.active; value = "0"; }
+      ];
     };
 
     activate = {
-      guard = E.eq (E.f "active") (E.lit 0);
-      set = { active = "1"; };
+      guard = E.eq (E.f F.active) (E.lit 0);
+      set = [
+        { field = F.active; value = "1"; }
+      ];
     };
   };
 }

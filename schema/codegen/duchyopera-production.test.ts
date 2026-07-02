@@ -57,7 +57,7 @@ describe("Duchy Opera production backend", () => {
       required: true,
       references: "user(id)",
     });
-    expect(schema.constraints?.artist_profile?.unique_user).toBeDefined();
+    expect(schema.constraints?.artist_profile?.unique?.unique_user).toBeDefined();
     expect(schema.tables.production_member.user_id.references).toBe("user(id)");
     expect(schema.tables.rehearsal_call.user_id.references).toBe("user(id)");
     expect(schema.tables.production.opens_on).toBeUndefined();

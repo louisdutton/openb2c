@@ -47,7 +47,7 @@ function metadataSchema(): Schema {
         }),
         status: col({
           metadata: { label: "Status", displayPriority: 20 },
-          validation: { enum: ["reserved", "cancelled"] },
+          constraints: { enum: ["reserved", "cancelled"] },
         }),
         seat: col({
           metadata: {
@@ -55,7 +55,7 @@ function metadataSchema(): Schema {
             helpText: "Seat label printed on ticket.",
             displayPriority: 30,
           },
-          validation: { maxLength: 24 },
+          constraints: { length: { max: 24 } },
         }),
         secret_token: col({
           metadata: { label: "Secret token", privacy: "secret", redact: true },

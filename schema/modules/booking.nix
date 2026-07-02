@@ -1,6 +1,10 @@
 { config, lib, ... }:
 let
   E = import ../lib/expr.nix;
+  F = config.refs.booking;
+  V = config.values.booking;
+  ticket = config.refs.ticket;
+  ticketStatus = config.values.ticket.status;
 in
 {
   tables.booking = {
@@ -14,7 +18,11 @@ in
         description = "Customer who owns this checkout.";
       };
     };
-    status = { type = "text"; default = "'checkout_pending'"; };  # checkout_pending, paid, expired, cancelled
+    status = {
+      type = "text";
+      default = "'checkout_pending'";
+      constraints.enum = [ "checkout_pending" "paid" "expired" "cancelled" ];
+    };
     amount_pence = { type = "integer"; required = true; };
     currency = { type = "text"; default = "'GBP'"; };
     expires_at = { type = "text"; required = true; };
@@ -44,35 +52,33 @@ in
     };
   };
 
-  constraints.booking.unique_payment_reference = {
-    kind = "unique";
-    fields = [ config.refs.booking.payment_reference ];
-    message = "Payment reference must be unique.";
+  constraints.booking.unique.unique_payment_reference = {
+    fields = with config.refs.booking; [ payment_reference ];
   };
 
-  constraints.booking_ticket.unique_ticket = {
-    kind = "unique";
-    fields = [ config.refs.booking_ticket.ticket_id ];
-    message = "A ticket can only belong to one active booking.";
+  constraints.booking_ticket.unique.unique_ticket = {
+    fields = with config.refs.booking_ticket; [ ticket_id ];
   };
 
-  constraints.booking_ticket.unique_pair = {
-    kind = "unique";
-    fields = [
-      config.refs.booking_ticket.booking_id
-      config.refs.booking_ticket.ticket_id
+  constraints.booking_ticket.unique.unique_pair = {
+    fields = with config.refs.booking_ticket; [
+      booking_id
+      ticket_id
     ];
-    message = "A ticket can only appear once in the same booking.";
   };
 
   operations.booking = {
     cancel = {
-      guard = E.eq (E.f "status") (E.lit "checkout_pending");
-      set = { status = "cancelled"; };
+      guard = E.eq (E.f F.status) (E.lit V.status.checkout_pending);
+      set = [
+        { field = F.status; value = V.status.cancelled; }
+      ];
       cascade = [{
         entity = "ticket";
         via = "booking_ticket";
-        set = { status = "cancelled"; };
+        set = [
+          { field = ticket.status; value = ticketStatus.cancelled; }
+        ];
       }];
       effects = [
         { notify = { channel = "email"; template = "booking_cancelled"; }; }

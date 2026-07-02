@@ -2,6 +2,8 @@
 { config, lib, ... }:
 let
   E = import ../lib/expr.nix;
+  F = config.refs.user;
+  V = config.values.user;
 in
 {
   tables.user = {
@@ -12,16 +14,18 @@ in
         label = "Customer type";
         displayPriority = 900;
       };
-      validation.enum = [ "individual" "patron" "organization" ];
+      constraints.enum = [ "individual" "patron" "organization" ];
     };
   };
 
   operations.user = {
     upgrade_to_patron = {
       guard = E.and
-        (E.ne (E.f "customer_type") (E.lit "patron"))
-        (E.notNull (E.f "email"));
-      set = { customer_type = "patron"; };
+        (E.ne (E.f F.customer_type) (E.lit V.customer_type.patron))
+        (E.notNull (E.f F.email));
+      set = [
+        { field = F.customer_type; value = V.customer_type.patron; }
+      ];
       effects = [
         { notify = { channel = "email"; template = "patron_welcome"; }; }
       ];

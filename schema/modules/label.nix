@@ -41,13 +41,11 @@ in
     created_at = { type = "text"; default = "CURRENT_TIMESTAMP"; };
   };
 
-  constraints.issue_label.unique_pair = {
-    kind = "unique";
-    fields = [
-      config.refs.issue_label.issue_id
-      config.refs.issue_label.label_id
+  constraints.issue_label.unique.unique_pair = {
+    fields = with config.refs.issue_label; [
+      issue_id
+      label_id
     ];
-    message = "A label can only be applied once to the same issue.";
   };
 
   operations.label = { };

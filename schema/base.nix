@@ -420,6 +420,14 @@ let
     };
   };
 
+  # Structured reference to an entity/table. These are generated under
+  # `config.entityRefs.<table>` for policy that needs an entity target.
+  tableRefType = lib.types.submodule {
+    options = {
+      table = lib.mkOption { type = lib.types.str; };
+    };
+  };
+
   fieldMetadataType = lib.types.submodule {
     options = {
       label = lib.mkOption {
@@ -456,41 +464,6 @@ let
         type = lib.types.bool;
         default = false;
         description = "Whether generated API responses should omit this field.";
-      };
-    };
-  };
-
-  fieldValidationType = lib.types.submodule {
-    options = {
-      minLength = lib.mkOption {
-        type = lib.types.nullOr lib.types.int;
-        default = null;
-        description = "Minimum string length.";
-      };
-      maxLength = lib.mkOption {
-        type = lib.types.nullOr lib.types.int;
-        default = null;
-        description = "Maximum string length.";
-      };
-      minimum = lib.mkOption {
-        type = lib.types.nullOr lib.types.number;
-        default = null;
-        description = "Minimum numeric value.";
-      };
-      maximum = lib.mkOption {
-        type = lib.types.nullOr lib.types.number;
-        default = null;
-        description = "Maximum numeric value.";
-      };
-      pattern = lib.mkOption {
-        type = lib.types.nullOr lib.types.str;
-        default = null;
-        description = "JavaScript-compatible regular expression pattern.";
-      };
-      enum = lib.mkOption {
-        type = lib.types.listOf lib.types.str;
-        default = [];
-        description = "Allowed finite string values.";
       };
     };
   };
@@ -545,6 +518,46 @@ let
     };
   };
 
+  columnBoundsConstraintType = lib.types.submodule {
+    options = {
+      min = lib.mkOption {
+        type = lib.types.nullOr lib.types.number;
+        default = null;
+        description = "Minimum accepted value.";
+      };
+      max = lib.mkOption {
+        type = lib.types.nullOr lib.types.number;
+        default = null;
+        description = "Maximum accepted value.";
+      };
+    };
+  };
+
+  columnConstraintType = lib.types.submodule {
+    options = {
+      enum = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [];
+        description = "Allowed finite values for this field.";
+      };
+      pattern = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = "JavaScript-compatible regular expression pattern for this field.";
+      };
+      length = lib.mkOption {
+        type = columnBoundsConstraintType;
+        default = {};
+        description = "String length bounds for this field.";
+      };
+      range = lib.mkOption {
+        type = columnBoundsConstraintType;
+        default = {};
+        description = "Numeric bounds for this field.";
+      };
+    };
+  };
+
   # Column definition
   columnType = lib.types.submodule {
     options = {
@@ -560,10 +573,10 @@ let
         default = {};
         description = "Presentation, ordering, and privacy metadata for generated outputs.";
       };
-      validation = lib.mkOption {
-        type = fieldValidationType;
+      constraints = lib.mkOption {
+        type = columnConstraintType;
         default = {};
-        description = "Per-field validation constraints for generated API schemas and services.";
+        description = "Single-field constraints colocated with this column.";
       };
       relationship = lib.mkOption {
         type = lib.types.nullOr fieldRelationshipType;
@@ -585,36 +598,61 @@ let
 
   relationshipSpecType = lib.types.either lib.types.str relationshipType;
 
-  constraintType = lib.types.submodule {
+  uniqueConstraintType = lib.types.submodule {
     options = {
-      kind = lib.mkOption {
-        type = lib.types.enum [ "unique" "check" ];
-        description = "Logical constraint kind. Unique constraints protect identity/cardinality; check constraints protect row invariants.";
-      };
       fields = lib.mkOption {
         type = lib.types.listOf fieldRefType;
         default = [];
-        description = "Structured local field references covered by this constraint.";
-      };
-      expression = lib.mkOption {
-        type = lib.types.nullOr lib.types.attrs;
-        default = null;
-        description = "Boolean expression AST for check constraints.";
+        description = "Structured local field references that must be unique together.";
       };
       condition = lib.mkOption {
         type = lib.types.nullOr lib.types.attrs;
         default = null;
         description = "Optional Boolean expression AST limiting when the constraint applies.";
       };
-      message = lib.mkOption {
-        type = lib.types.nullOr lib.types.str;
+      enforcement = lib.mkOption {
+        type = lib.types.enum [ "auto" "database" "application" "both" ];
+        default = "auto";
+        description = "Preferred enforcement layer. Auto chooses database for unique constraints.";
+      };
+    };
+  };
+
+  checkConstraintType = lib.types.submodule {
+    options = {
+      fields = lib.mkOption {
+        type = lib.types.listOf fieldRefType;
+        default = [];
+        description = "Structured local field references covered by this check.";
+      };
+      expression = lib.mkOption {
+        type = lib.types.attrs;
+        description = "Boolean expression AST that must evaluate truthy for a valid record.";
+      };
+      condition = lib.mkOption {
+        type = lib.types.nullOr lib.types.attrs;
         default = null;
-        description = "Human-readable validation error shown when the constraint fails.";
+        description = "Optional Boolean expression AST limiting when the check applies.";
       };
       enforcement = lib.mkOption {
         type = lib.types.enum [ "auto" "database" "application" "both" ];
         default = "auto";
-        description = "Preferred enforcement layer. Auto chooses database for unique and both database/application for checks.";
+        description = "Preferred enforcement layer. Auto chooses database and application for check constraints.";
+      };
+    };
+  };
+
+  constraintGroupType = lib.types.submodule {
+    options = {
+      unique = lib.mkOption {
+        type = lib.types.attrsOf uniqueConstraintType;
+        default = {};
+        description = "Uniqueness constraints keyed by logical constraint name.";
+      };
+      check = lib.mkOption {
+        type = lib.types.attrsOf checkConstraintType;
+        default = {};
+        description = "Row-local check constraints keyed by logical constraint name.";
       };
     };
   };
@@ -819,12 +857,39 @@ let
     };
   };
 
+  # Typed field assignment. The option normalizes back to attrs so codegen stays stable.
+  assignmentType = lib.types.submodule {
+    options = {
+      field = lib.mkOption {
+        type = fieldRefType;
+        description = "Structured local field reference to assign.";
+      };
+      value = lib.mkOption {
+        type = lib.types.str;
+        description = "Value to assign.";
+      };
+    };
+  };
+
+  assignmentSetType = lib.types.either (lib.types.attrsOf lib.types.str) (lib.types.listOf assignmentType);
+  normalizeAssignmentSet = value:
+    if builtins.isList value
+    then lib.listToAttrs (map (assignment: {
+      name = assignment.field.field;
+      value = assignment.value;
+    }) value)
+    else value;
+
   # Cascade update
   cascadeType = lib.types.submodule {
     options = {
       entity = lib.mkOption { type = lib.types.str; };
       via = lib.mkOption { type = lib.types.nullOr lib.types.str; default = null; };
-      set = lib.mkOption { type = lib.types.attrsOf lib.types.str; default = {}; };
+      set = lib.mkOption {
+        type = assignmentSetType;
+        default = {};
+        apply = normalizeAssignmentSet;
+      };
     };
   };
 
@@ -999,9 +1064,10 @@ let
         description = "Audit logging requirement metadata for this operation.";
       };
       set = lib.mkOption {
-        type = lib.types.attrsOf lib.types.str;
+        type = assignmentSetType;
         default = {};
-        description = "Fields to update";
+        apply = normalizeAssignmentSet;
+        description = "Fields to update. Prefer typed assignments with structured field references.";
       };
       cascade = lib.mkOption {
         type = lib.types.listOf cascadeType;
@@ -1077,6 +1143,22 @@ in {
       description = "Structured references for table fields.";
     };
 
+    entityRefs = lib.mkOption {
+      type = lib.types.attrsOf tableRefType;
+      default = lib.mapAttrs (table: _cols: { inherit table; }) config.tables;
+      description = "Structured references for entities/tables.";
+    };
+
+    values = lib.mkOption {
+      type = lib.types.attrsOf (lib.types.attrsOf (lib.types.attrsOf lib.types.str));
+      default = lib.mapAttrs (table: cols:
+        lib.mapAttrs (field: col:
+          lib.listToAttrs (map (value: { name = value; inherit value; }) col.constraints.enum)
+        ) cols
+      ) config.tables;
+      description = "Structured references for finite field values declared by column enum constraints.";
+    };
+
     relationships = lib.mkOption {
       type = lib.types.attrsOf (lib.types.attrsOf relationshipType);
       default = {};
@@ -1084,9 +1166,9 @@ in {
     };
 
     constraints = lib.mkOption {
-      type = lib.types.attrsOf (lib.types.attrsOf constraintType);
+      type = lib.types.attrsOf constraintGroupType;
       default = {};
-      description = "Logical data constraints per entity. Generators allocate enforcement to database and/or application layers.";
+      description = "Logical data constraints per entity, grouped by constraint type. Generators allocate enforcement to database and/or application layers.";
     };
 
     operations = lib.mkOption {

@@ -31,9 +31,9 @@ function schema(): Schema {
     tables: {
       note: {
         id: col({ type: "integer", pk: true, auto: true }),
-        title: col({ required: true, validation: { minLength: 3 } }),
-        priority: col({ type: "integer", required: true, validation: { minimum: 1, maximum: 5 } }),
-        status: col({ required: true, validation: { enum: ["todo", "done"] } }),
+        title: col({ required: true, constraints: { length: { min: 3 } } }),
+        priority: col({ type: "integer", required: true, constraints: { range: { min: 1, max: 5 } } }),
+        status: col({ required: true, constraints: { enum: ["todo", "done"] } }),
         url: col({ metadata: { format: "url" } }),
       },
     },

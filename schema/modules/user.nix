@@ -22,9 +22,9 @@
         placeholder = "Full name";
         displayPriority = 20;
       };
-      validation = {
-        minLength = 1;
-        maxLength = 120;
+      constraints.length = {
+        min = 1;
+        max = 120;
       };
     };
     phone = {
@@ -55,9 +55,7 @@
     };
   };
 
-  constraints.user.unique_email = {
-    kind = "unique";
-    fields = [ config.refs.user.email ];
-    message = "Email must be unique.";
+  constraints.user.unique.unique_email = {
+    fields = with config.refs.user; [ email ];
   };
 }

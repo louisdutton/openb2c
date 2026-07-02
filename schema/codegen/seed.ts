@@ -1,5 +1,6 @@
 import type { Column, Schema, SeedRows, SeedValue, Tables } from "./types";
 import { quoteReserved } from "./utils";
+import { normalizeConstraints } from "./constraints";
 
 export type SeedKind = "reference" | "fixtures";
 
@@ -64,7 +65,7 @@ function conflictColumns(schema: Schema, table: string, columns: Record<string, 
     .find(([field, column]) => column.unique && hasOwn(row, field));
   if (unique) return [unique[0]];
 
-  for (const constraint of Object.values(schema.constraints?.[table] || {})) {
+  for (const constraint of Object.values(normalizeConstraints(schema.constraints, schema.tables)[table] || {})) {
     if (constraint.kind !== "unique" || constraint.condition || constraint.enforcement === "application") continue;
     const fields = constraint.fields.filter(field => field.table === table).map(field => field.field);
     if (fields.length > 0 && fields.length === constraint.fields.length && fields.every(field => hasOwn(row, field))) {

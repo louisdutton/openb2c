@@ -1,4 +1,5 @@
 import type { Column, Schema } from "./types";
+import { fieldConstraintRules, type FieldConstraintRule } from "./constraints";
 import { envVarSpecs, requiredProductionEnvVars } from "./config";
 import { hasCommerceWorkflow, hasCommerceBookingAliases, pascalCase, camelCase } from "./utils";
 
@@ -161,9 +162,8 @@ type RequestSchema = {
   fields: Record<string, RequestFieldSpec>;
 };
 
-function requestFieldSpec(field: string, column: Column, required: boolean): RequestFieldSpec {
+function requestFieldSpec(field: string, column: Column, required: boolean, validation: FieldConstraintRule = {}): RequestFieldSpec {
   const metadata = column.metadata || {};
-  const validation = column.validation || {};
   return {
     type: column.type,
     required,
@@ -188,6 +188,7 @@ function createRelationshipFields(schema: Schema, entity: string): Set<string> {
 
 function requestSchemasForSchema(schema: Schema): Record<string, { create: RequestSchema; update: RequestSchema }> {
   const result: Record<string, { create: RequestSchema; update: RequestSchema }> = {};
+  const constraintRules = fieldConstraintRules(schema.tables, schema.constraints);
   for (const [entity, columns] of Object.entries(schema.tables)) {
     const createOptional = createRelationshipFields(schema, entity);
     const createFields: Record<string, RequestFieldSpec> = {};
@@ -196,10 +197,11 @@ function requestSchemasForSchema(schema: Schema): Record<string, { create: Reque
     for (const [field, column] of Object.entries(columns)) {
       if (column.pk && column.auto) continue;
       const generatedApiKeyField = entity === "api_key" && (field === "key_hash" || field === "key_prefix");
+      const validation = constraintRules[entity]?.[field] || {};
       if (!generatedApiKeyField) {
-        createFields[field] = requestFieldSpec(field, column, column.required && !createOptional.has(field));
+        createFields[field] = requestFieldSpec(field, column, column.required && !createOptional.has(field), validation);
       }
-      updateFields[field] = requestFieldSpec(field, column, false);
+      updateFields[field] = requestFieldSpec(field, column, false, validation);
     }
 
     result[entity] = {

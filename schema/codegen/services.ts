@@ -1,6 +1,7 @@
-import type { Column, Constraint, DerivedField, EcommerceConfig, FieldRef, Operation, Schema, Tables } from "./types";
+import type { Column, DerivedField, EcommerceConfig, FieldRef, NormalizedConstraint, Operation, Schema, Tables } from "./types";
 import { pascalCase, camelCase, getEcommerceConfig, hasCommerceWorkflow, hasCommerceBookingAliases } from "./utils";
 import { compileExpr, extractRelations } from "./expr";
+import { fieldConstraintRules, inferredConstraintMessage, normalizeConstraints } from "./constraints";
 
 const CRUD_ACTIONS = new Set(["read", "create", "update", "delete"]);
 
@@ -193,11 +194,12 @@ function selfServiceScopes(schema: Schema): string[] {
 
 function fieldValidationRules(schema: Schema): Record<string, Record<string, unknown>> {
   const rules: Record<string, Record<string, unknown>> = {};
+  const constraintRules = fieldConstraintRules(schema.tables, schema.constraints);
   for (const [entity, columns] of Object.entries(schema.tables)) {
     const entityRules: Record<string, unknown> = {};
     for (const [field, column] of Object.entries(columns)) {
       const metadata = column.metadata || {};
-      const validation = column.validation || {};
+      const validation = constraintRules[entity]?.[field] || {};
       const rule: Record<string, unknown> = {};
       if (metadata.label) rule.label = metadata.label;
       if (metadata.format) rule.format = metadata.format;
@@ -234,14 +236,15 @@ function crossFieldValidationCases(schema: Schema): string {
   const cases: string[] = [];
   const checksByEntity: Record<string, string[]> = {};
 
-  for (const [entity, constraints] of Object.entries(schema.constraints || {})) {
-    for (const constraint of Object.values(constraints)) {
+  const normalizedConstraints = normalizeConstraints(schema.constraints, schema.tables);
+  for (const [entity, constraints] of Object.entries(normalizedConstraints)) {
+    for (const [name, constraint] of Object.entries(constraints)) {
       if (!applicationCheckConstraint(constraint)) continue;
       checksByEntity[entity] ||= [];
       const expression = compileExpr(constraint.expression!, "record");
       const condition = constraint.condition ? compileExpr(constraint.condition, "record") : "";
       const predicate = condition ? `(!(${condition}) || (${expression}))` : `(${expression})`;
-      checksByEntity[entity].push(`    if (!(${predicate})) return ${JSON.stringify(constraint.message || "Constraint failed.")};`);
+      checksByEntity[entity].push(`    if (!(${predicate})) return ${JSON.stringify(inferredConstraintMessage(schema.tables, entity, name, constraint))};`);
     }
   }
 
@@ -251,7 +254,7 @@ function crossFieldValidationCases(schema: Schema): string {
   return cases.join("\n");
 }
 
-function applicationCheckConstraint(constraint: Constraint): boolean {
+function applicationCheckConstraint(constraint: NormalizedConstraint): boolean {
   if (constraint.kind !== "check" || !constraint.expression) return false;
   return constraint.enforcement !== "database";
 }

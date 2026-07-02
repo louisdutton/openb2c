@@ -1,6 +1,10 @@
 { config, lib, ... }:
 let
   E = import ../lib/expr.nix;
+  F = config.refs.ticket;
+  V = config.values.ticket;
+  performance = config.entityRefs.performance;
+  performanceStatus = config.values.performance.status;
 in
 {
   tables.ticket = {
@@ -38,7 +42,7 @@ in
         placeholder = "A12";
         displayPriority = 30;
       };
-      validation.maxLength = 24;
+      constraints.length.max = 24;
     };
     price_pence = {
       type = "integer";
@@ -48,7 +52,7 @@ in
         format = "money";
         displayPriority = 40;
       };
-      validation.minimum = 0;
+      constraints.range.min = 0;
     };
     ticket_type = {
       type = "text";
@@ -57,7 +61,7 @@ in
         label = "Ticket type";
         displayPriority = 50;
       };
-      validation.enum = [ "standard" "vip" "concession" ];
+      constraints.enum = [ "standard" "concession" "patron" "vip" ];
     };
     status = {
       type = "text";
@@ -66,7 +70,7 @@ in
         label = "Status";
         displayPriority = 60;
       };
-      validation.enum = [ "reserved" "confirmed" "cancelled" "used" ];
+      constraints.enum = [ "reserved" "confirmed" "cancelled" "used" ];
     };
     created_at = {
       type = "text";
@@ -79,25 +83,21 @@ in
     };
   };
 
-  constraints.ticket.unique_performance_seat = {
-    kind = "unique";
-    fields = [
-      config.refs.ticket.performance_id
-      config.refs.ticket.seat
+  constraints.ticket.unique.unique_performance_seat = {
+    fields = with config.refs.ticket; [
+      performance_id
+      seat
     ];
-    message = "Seat must be unique per performance.";
   };
 
-  constraints.ticket.vip_price_minimum = {
-    kind = "check";
-    fields = [
-      config.refs.ticket.ticket_type
-      config.refs.ticket.price_pence
+  constraints.ticket.check.vip_price_minimum = {
+    fields = with config.refs.ticket; [
+      ticket_type
+      price_pence
     ];
     expression = E.or
-      (E.ne (E.f "ticket_type") (E.lit "vip"))
-      (E.gte (E.f "price_pence") (E.lit 2500));
-    message = "VIP tickets must cost at least GBP 25.00.";
+      (E.ne (E.f F.ticket_type) (E.lit V.ticket_type.vip))
+      (E.gte (E.f F.price_pence) (E.lit 2500));
   };
 
   audit.entities.ticket = {
@@ -122,17 +122,19 @@ in
       workflow = {
         group = "ticketLifecycle";
         transitions = [{
-          field = config.refs.ticket.status;
-          from = [ "reserved" ];
-          to = "confirmed";
+          field = F.status;
+          from = [ V.status.reserved ];
+          to = V.status.confirmed;
         }];
         audit.summary = "Confirmed ticket";
       };
       guard = E.and
-        (E.eq (E.f "status") (E.lit "reserved"))
+        (E.eq (E.f F.status) (E.lit V.status.reserved))
         # Can't confirm if performance is cancelled
-        (E.ne (E.rel "performance" "status") (E.lit "cancelled"));
-      set = { status = "confirmed"; };
+        (E.ne (E.rel performance config.refs.performance.status) (E.lit performanceStatus.cancelled));
+      set = [
+        { field = F.status; value = V.status.confirmed; }
+      ];
       effects = [
         { notify = { channel = "email"; template = "ticket_confirmation"; }; }
       ];
@@ -146,9 +148,9 @@ in
       workflow = {
         group = "ticketLifecycle";
         transitions = [{
-          field = config.refs.ticket.status;
-          from = [ "reserved" "confirmed" ];
-          to = "cancelled";
+          field = F.status;
+          from = with V.status; [ reserved confirmed ];
+          to = V.status.cancelled;
         }];
         audit.summary = "Cancelled ticket";
         confirmation = {
@@ -160,9 +162,11 @@ in
         };
       };
       guard = E.or
-        (E.eq (E.f "status") (E.lit "reserved"))
-        (E.eq (E.f "status") (E.lit "confirmed"));
-      set = { status = "cancelled"; };
+        (E.eq (E.f F.status) (E.lit V.status.reserved))
+        (E.eq (E.f F.status) (E.lit V.status.confirmed));
+      set = [
+        { field = F.status; value = V.status.cancelled; }
+      ];
     };
 
     use = {
@@ -180,16 +184,18 @@ in
       workflow = {
         group = "ticketLifecycle";
         transitions = [{
-          field = config.refs.ticket.status;
-          from = [ "confirmed" ];
-          to = "used";
+          field = F.status;
+          from = [ V.status.confirmed ];
+          to = V.status.used;
         }];
         audit.summary = "Marked ticket as used";
       };
       guard = E.and
-        (E.eq (E.f "status") (E.lit "confirmed"))
-        (E.eq (E.rel "performance" "status") (E.lit "scheduled"));
-      set = { status = "used"; };
+        (E.eq (E.f F.status) (E.lit V.status.confirmed))
+        (E.eq (E.rel performance config.refs.performance.status) (E.lit performanceStatus.scheduled));
+      set = [
+        { field = F.status; value = V.status.used; }
+      ];
     };
 
     upgrade = {
@@ -205,16 +211,18 @@ in
       workflow = {
         group = "ticketLifecycle";
         transitions = [{
-          field = config.refs.ticket.ticket_type;
-          from = [ "standard" ];
-          to = "vip";
+          field = F.ticket_type;
+          from = [ V.ticket_type.standard ];
+          to = V.ticket_type.vip;
         }];
         audit.summary = "Upgraded ticket";
       };
       guard = E.and
-        (E.eq (E.f "ticket_type") (E.lit "standard"))
-        (E.eq (E.f "status") (E.lit "confirmed"));
-      set = { ticket_type = "vip"; };
+        (E.eq (E.f F.ticket_type) (E.lit V.ticket_type.standard))
+        (E.eq (E.f F.status) (E.lit V.status.confirmed));
+      set = [
+        { field = F.ticket_type; value = V.ticket_type.vip; }
+      ];
     };
   };
 }

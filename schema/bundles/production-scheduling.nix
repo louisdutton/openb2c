@@ -1,6 +1,16 @@
 { config, lib, ... }:
 let
   E = import ../lib/expr.nix;
+  production = config.refs.production;
+  productionStatus = config.values.production.status;
+  rehearsal = config.refs.rehearsal;
+  rehearsalStatus = config.values.rehearsal.status;
+  rehearsalCall = config.refs.rehearsal_call;
+  callStatus = config.values.rehearsal_call.call_status;
+  requirement = config.refs.rehearsal_requirement;
+  requirementStatus = config.values.rehearsal_requirement.status;
+  coverage = config.refs.rehearsal_coverage;
+  coverageStatus = config.values.rehearsal_coverage.status;
 in
 {
   tables.production = {
@@ -13,7 +23,7 @@ in
         placeholder = "The Magic Flute";
         displayPriority = 10;
       };
-      validation.maxLength = 160;
+      constraints.length.max = 160;
     };
     season = {
       type = "text";
@@ -22,7 +32,7 @@ in
         placeholder = "Summer 2026";
         displayPriority = 20;
       };
-      validation.maxLength = 80;
+      constraints.length.max = 80;
     };
     description = {
       type = "text";
@@ -39,7 +49,7 @@ in
         label = "Status";
         displayPriority = 40;
       };
-      validation.enum = [ "planning" "active" "completed" "cancelled" ];
+      constraints.enum = [ "planning" "active" "completed" "cancelled" ];
     };
     created_at = {
       type = "text";
@@ -98,7 +108,7 @@ in
         placeholder = "Pamina";
         displayPriority = 20;
       };
-      validation.maxLength = 120;
+      constraints.length.max = 120;
     };
     category = {
       type = "text";
@@ -107,7 +117,7 @@ in
         label = "Category";
         displayPriority = 30;
       };
-      validation.enum = [ "cast" "creative" "crew" "orchestra" "admin" ];
+      constraints.enum = [ "cast" "creative" "crew" "orchestra" "admin" ];
     };
     description = {
       type = "text";
@@ -124,7 +134,7 @@ in
         label = "Required count";
         displayPriority = 50;
       };
-      validation.minimum = 1;
+      constraints.range.min = 1;
     };
     status = {
       type = "text";
@@ -133,7 +143,7 @@ in
         label = "Status";
         displayPriority = 60;
       };
-      validation.enum = [ "open" "filled" "withdrawn" ];
+      constraints.enum = [ "open" "filled" "withdrawn" ];
     };
   };
 
@@ -178,7 +188,7 @@ in
         label = "Status";
         displayPriority = 40;
       };
-      validation.enum = [ "invited" "confirmed" "declined" "released" ];
+      constraints.enum = [ "invited" "confirmed" "declined" "released" ];
     };
   };
 
@@ -200,7 +210,7 @@ in
         placeholder = "Act I music call";
         displayPriority = 10;
       };
-      validation.maxLength = 160;
+      constraints.length.max = 160;
     };
     venue_id = {
       type = "integer";
@@ -239,7 +249,7 @@ in
         label = "Status";
         displayPriority = 50;
       };
-      validation.enum = [ "draft" "published" "completed" "cancelled" ];
+      constraints.enum = [ "draft" "published" "completed" "cancelled" ];
     };
     notes = {
       type = "text";
@@ -301,7 +311,7 @@ in
         label = "Status";
         displayPriority = 30;
       };
-      validation.enum = [ "called" "confirmed" "declined" "attended" "absent" ];
+      constraints.enum = [ "called" "confirmed" "declined" "attended" "absent" ];
     };
     notes = {
       type = "text";
@@ -331,7 +341,7 @@ in
         placeholder = "Act I finale";
         displayPriority = 10;
       };
-      validation.maxLength = 160;
+      constraints.length.max = 160;
     };
     category = {
       type = "text";
@@ -340,7 +350,7 @@ in
         label = "Category";
         displayPriority = 20;
       };
-      validation.enum = [ "scene" "act" "role" "ensemble" "technical" "music" ];
+      constraints.enum = [ "scene" "act" "role" "ensemble" "technical" "music" ];
     };
     required_sessions = {
       type = "integer";
@@ -349,7 +359,7 @@ in
         label = "Required sessions";
         displayPriority = 30;
       };
-      validation.minimum = 1;
+      constraints.range.min = 1;
     };
     status = {
       type = "text";
@@ -358,7 +368,7 @@ in
         label = "Status";
         displayPriority = 40;
       };
-      validation.enum = [ "open" "scheduled" "covered" "dropped" ];
+      constraints.enum = [ "open" "scheduled" "covered" "dropped" ];
     };
   };
 
@@ -387,7 +397,7 @@ in
         label = "Status";
         displayPriority = 30;
       };
-      validation.enum = [ "planned" "covered" "deferred" ];
+      constraints.enum = [ "planned" "covered" "deferred" ];
     };
     notes = {
       type = "text";
@@ -399,41 +409,33 @@ in
     };
   };
 
-  constraints.production_member.unique_production_user = {
-    kind = "unique";
-    fields = [
-      config.refs.production_member.production_id
-      config.refs.production_member.user_id
+  constraints.production_member.unique.unique_production_user = {
+    fields = with config.refs.production_member; [
+      production_id
+      user_id
     ];
-    message = "A user can only be assigned once to the same production.";
   };
 
-  constraints.rehearsal_call.unique_rehearsal_user = {
-    kind = "unique";
-    fields = [
-      config.refs.rehearsal_call.rehearsal_id
-      config.refs.rehearsal_call.user_id
+  constraints.rehearsal_call.unique.unique_rehearsal_user = {
+    fields = with config.refs.rehearsal_call; [
+      rehearsal_id
+      user_id
     ];
-    message = "A user can only be called once for the same rehearsal.";
   };
 
-  constraints.rehearsal_coverage.unique_requirement_rehearsal = {
-    kind = "unique";
-    fields = [
-      config.refs.rehearsal_coverage.requirement_id
-      config.refs.rehearsal_coverage.rehearsal_id
+  constraints.rehearsal_coverage.unique.unique_requirement_rehearsal = {
+    fields = with config.refs.rehearsal_coverage; [
+      requirement_id
+      rehearsal_id
     ];
-    message = "A requirement can only have one coverage record for the same rehearsal.";
   };
 
-  constraints.rehearsal.ends_after_start = {
-    kind = "check";
-    fields = [
-      config.refs.rehearsal.starts_at
-      config.refs.rehearsal.ends_at
+  constraints.rehearsal.check.ends_after_start = {
+    fields = with config.refs.rehearsal; [
+      starts_at
+      ends_at
     ];
-    expression = E.lt (E.f "starts_at") (E.f "ends_at");
-    message = "Rehearsal end time must be after the start time.";
+    expression = E.lt (E.f rehearsal.starts_at) (E.f rehearsal.ends_at);
   };
 
   audit.entities.production = {
@@ -494,14 +496,16 @@ in
       workflow = {
         group = "productionLifecycle";
         transitions = [{
-          field = config.refs.production.status;
-          from = [ "planning" ];
-          to = "active";
+          field = production.status;
+          from = [ productionStatus.planning ];
+          to = productionStatus.active;
         }];
         audit.summary = "Activated production";
       };
-      guard = E.eq (E.f "status") (E.lit "planning");
-      set = { status = "active"; };
+      guard = E.eq (E.f production.status) (E.lit productionStatus.planning);
+      set = [
+        { field = production.status; value = productionStatus.active; }
+      ];
     };
 
     complete = {
@@ -513,14 +517,16 @@ in
       workflow = {
         group = "productionLifecycle";
         transitions = [{
-          field = config.refs.production.status;
-          from = [ "active" ];
-          to = "completed";
+          field = production.status;
+          from = [ productionStatus.active ];
+          to = productionStatus.completed;
         }];
         audit.summary = "Completed production";
       };
-      guard = E.eq (E.f "status") (E.lit "active");
-      set = { status = "completed"; };
+      guard = E.eq (E.f production.status) (E.lit productionStatus.active);
+      set = [
+        { field = production.status; value = productionStatus.completed; }
+      ];
     };
 
     cancel = {
@@ -533,9 +539,9 @@ in
       workflow = {
         group = "productionLifecycle";
         transitions = [{
-          field = config.refs.production.status;
-          from = [ "planning" "active" ];
-          to = "cancelled";
+          field = production.status;
+          from = with productionStatus; [ planning active ];
+          to = productionStatus.cancelled;
         }];
         audit.summary = "Cancelled production";
         confirmation = {
@@ -547,9 +553,11 @@ in
         };
       };
       guard = E.and
-        (E.ne (E.f "status") (E.lit "completed"))
-        (E.ne (E.f "status") (E.lit "cancelled"));
-      set = { status = "cancelled"; };
+        (E.ne (E.f production.status) (E.lit productionStatus.completed))
+        (E.ne (E.f production.status) (E.lit productionStatus.cancelled));
+      set = [
+        { field = production.status; value = productionStatus.cancelled; }
+      ];
     };
   };
 
@@ -563,14 +571,16 @@ in
       workflow = {
         group = "rehearsalLifecycle";
         transitions = [{
-          field = config.refs.rehearsal.status;
-          from = [ "draft" ];
-          to = "published";
+          field = rehearsal.status;
+          from = [ rehearsalStatus.draft ];
+          to = rehearsalStatus.published;
         }];
         audit.summary = "Published rehearsal";
       };
-      guard = E.eq (E.f "status") (E.lit "draft");
-      set = { status = "published"; };
+      guard = E.eq (E.f rehearsal.status) (E.lit rehearsalStatus.draft);
+      set = [
+        { field = rehearsal.status; value = rehearsalStatus.published; }
+      ];
       effects = [
         { notify = { channel = "email"; template = "rehearsal_published"; to = "participants"; }; }
       ];
@@ -585,14 +595,16 @@ in
       workflow = {
         group = "rehearsalLifecycle";
         transitions = [{
-          field = config.refs.rehearsal.status;
-          from = [ "published" ];
-          to = "completed";
+          field = rehearsal.status;
+          from = [ rehearsalStatus.published ];
+          to = rehearsalStatus.completed;
         }];
         audit.summary = "Completed rehearsal";
       };
-      guard = E.eq (E.f "status") (E.lit "published");
-      set = { status = "completed"; };
+      guard = E.eq (E.f rehearsal.status) (E.lit rehearsalStatus.published);
+      set = [
+        { field = rehearsal.status; value = rehearsalStatus.completed; }
+      ];
     };
 
     cancel = {
@@ -605,9 +617,9 @@ in
       workflow = {
         group = "rehearsalLifecycle";
         transitions = [{
-          field = config.refs.rehearsal.status;
-          from = [ "draft" "published" ];
-          to = "cancelled";
+          field = rehearsal.status;
+          from = with rehearsalStatus; [ draft published ];
+          to = rehearsalStatus.cancelled;
         }];
         audit.summary = "Cancelled rehearsal";
         confirmation = {
@@ -619,9 +631,11 @@ in
         };
       };
       guard = E.and
-        (E.ne (E.f "status") (E.lit "completed"))
-        (E.ne (E.f "status") (E.lit "cancelled"));
-      set = { status = "cancelled"; };
+        (E.ne (E.f rehearsal.status) (E.lit rehearsalStatus.completed))
+        (E.ne (E.f rehearsal.status) (E.lit rehearsalStatus.cancelled));
+      set = [
+        { field = rehearsal.status; value = rehearsalStatus.cancelled; }
+      ];
       effects = [
         { notify = { channel = "email"; template = "rehearsal_cancelled"; to = "participants"; }; }
       ];
@@ -638,14 +652,16 @@ in
       workflow = {
         group = "rehearsalAttendance";
         transitions = [{
-          field = config.refs.rehearsal_call.call_status;
-          from = [ "called" ];
-          to = "confirmed";
+          field = rehearsalCall.call_status;
+          from = [ callStatus.called ];
+          to = callStatus.confirmed;
         }];
         audit.summary = "Confirmed rehearsal call";
       };
-      guard = E.eq (E.f "call_status") (E.lit "called");
-      set = { call_status = "confirmed"; };
+      guard = E.eq (E.f rehearsalCall.call_status) (E.lit callStatus.called);
+      set = [
+        { field = rehearsalCall.call_status; value = callStatus.confirmed; }
+      ];
     };
 
     decline = {
@@ -657,16 +673,18 @@ in
       workflow = {
         group = "rehearsalAttendance";
         transitions = [{
-          field = config.refs.rehearsal_call.call_status;
-          from = [ "called" "confirmed" ];
-          to = "declined";
+          field = rehearsalCall.call_status;
+          from = with callStatus; [ called confirmed ];
+          to = callStatus.declined;
         }];
         audit.summary = "Declined rehearsal call";
       };
       guard = E.or
-        (E.eq (E.f "call_status") (E.lit "called"))
-        (E.eq (E.f "call_status") (E.lit "confirmed"));
-      set = { call_status = "declined"; };
+        (E.eq (E.f rehearsalCall.call_status) (E.lit callStatus.called))
+        (E.eq (E.f rehearsalCall.call_status) (E.lit callStatus.confirmed));
+      set = [
+        { field = rehearsalCall.call_status; value = callStatus.declined; }
+      ];
     };
 
     mark_attended = {
@@ -678,14 +696,16 @@ in
       workflow = {
         group = "rehearsalAttendance";
         transitions = [{
-          field = config.refs.rehearsal_call.call_status;
-          from = [ "confirmed" ];
-          to = "attended";
+          field = rehearsalCall.call_status;
+          from = [ callStatus.confirmed ];
+          to = callStatus.attended;
         }];
         audit.summary = "Marked rehearsal call attended";
       };
-      guard = E.eq (E.f "call_status") (E.lit "confirmed");
-      set = { call_status = "attended"; };
+      guard = E.eq (E.f rehearsalCall.call_status) (E.lit callStatus.confirmed);
+      set = [
+        { field = rehearsalCall.call_status; value = callStatus.attended; }
+      ];
     };
 
     mark_absent = {
@@ -697,14 +717,16 @@ in
       workflow = {
         group = "rehearsalAttendance";
         transitions = [{
-          field = config.refs.rehearsal_call.call_status;
-          from = [ "confirmed" ];
-          to = "absent";
+          field = rehearsalCall.call_status;
+          from = [ callStatus.confirmed ];
+          to = callStatus.absent;
         }];
         audit.summary = "Marked rehearsal call absent";
       };
-      guard = E.eq (E.f "call_status") (E.lit "confirmed");
-      set = { call_status = "absent"; };
+      guard = E.eq (E.f rehearsalCall.call_status) (E.lit callStatus.confirmed);
+      set = [
+        { field = rehearsalCall.call_status; value = callStatus.absent; }
+      ];
     };
   };
 
@@ -718,14 +740,16 @@ in
       workflow = {
         group = "rehearsalCoverage";
         transitions = [{
-          field = config.refs.rehearsal_requirement.status;
-          from = [ "open" ];
-          to = "scheduled";
+          field = requirement.status;
+          from = [ requirementStatus.open ];
+          to = requirementStatus.scheduled;
         }];
         audit.summary = "Scheduled rehearsal requirement";
       };
-      guard = E.eq (E.f "status") (E.lit "open");
-      set = { status = "scheduled"; };
+      guard = E.eq (E.f requirement.status) (E.lit requirementStatus.open);
+      set = [
+        { field = requirement.status; value = requirementStatus.scheduled; }
+      ];
     };
 
     cover = {
@@ -737,16 +761,18 @@ in
       workflow = {
         group = "rehearsalCoverage";
         transitions = [{
-          field = config.refs.rehearsal_requirement.status;
-          from = [ "open" "scheduled" ];
-          to = "covered";
+          field = requirement.status;
+          from = with requirementStatus; [ open scheduled ];
+          to = requirementStatus.covered;
         }];
         audit.summary = "Covered rehearsal requirement";
       };
       guard = E.or
-        (E.eq (E.f "status") (E.lit "open"))
-        (E.eq (E.f "status") (E.lit "scheduled"));
-      set = { status = "covered"; };
+        (E.eq (E.f requirement.status) (E.lit requirementStatus.open))
+        (E.eq (E.f requirement.status) (E.lit requirementStatus.scheduled));
+      set = [
+        { field = requirement.status; value = requirementStatus.covered; }
+      ];
     };
 
     drop = {
@@ -759,9 +785,9 @@ in
       workflow = {
         group = "rehearsalCoverage";
         transitions = [{
-          field = config.refs.rehearsal_requirement.status;
-          from = [ "open" "scheduled" ];
-          to = "dropped";
+          field = requirement.status;
+          from = with requirementStatus; [ open scheduled ];
+          to = requirementStatus.dropped;
         }];
         audit.summary = "Dropped rehearsal requirement";
         confirmation = {
@@ -773,9 +799,11 @@ in
         };
       };
       guard = E.and
-        (E.ne (E.f "status") (E.lit "covered"))
-        (E.ne (E.f "status") (E.lit "dropped"));
-      set = { status = "dropped"; };
+        (E.ne (E.f requirement.status) (E.lit requirementStatus.covered))
+        (E.ne (E.f requirement.status) (E.lit requirementStatus.dropped));
+      set = [
+        { field = requirement.status; value = requirementStatus.dropped; }
+      ];
     };
   };
 
@@ -789,16 +817,18 @@ in
       workflow = {
         group = "rehearsalCoverage";
         transitions = [{
-          field = config.refs.rehearsal_coverage.status;
-          from = [ "planned" "deferred" ];
-          to = "covered";
+          field = coverage.status;
+          from = with coverageStatus; [ planned deferred ];
+          to = coverageStatus.covered;
         }];
         audit.summary = "Marked requirement coverage complete";
       };
       guard = E.or
-        (E.eq (E.f "status") (E.lit "planned"))
-        (E.eq (E.f "status") (E.lit "deferred"));
-      set = { status = "covered"; };
+        (E.eq (E.f coverage.status) (E.lit coverageStatus.planned))
+        (E.eq (E.f coverage.status) (E.lit coverageStatus.deferred));
+      set = [
+        { field = coverage.status; value = coverageStatus.covered; }
+      ];
     };
 
     defer = {
@@ -810,14 +840,16 @@ in
       workflow = {
         group = "rehearsalCoverage";
         transitions = [{
-          field = config.refs.rehearsal_coverage.status;
-          from = [ "planned" ];
-          to = "deferred";
+          field = coverage.status;
+          from = [ coverageStatus.planned ];
+          to = coverageStatus.deferred;
         }];
         audit.summary = "Deferred requirement coverage";
       };
-      guard = E.eq (E.f "status") (E.lit "planned");
-      set = { status = "deferred"; };
+      guard = E.eq (E.f coverage.status) (E.lit coverageStatus.planned);
+      set = [
+        { field = coverage.status; value = coverageStatus.deferred; }
+      ];
     };
   };
 }

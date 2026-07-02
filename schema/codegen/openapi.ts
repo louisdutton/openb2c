@@ -1,5 +1,6 @@
 import type { AuthConfig, Column, DerivedField, Expr, Operation, Schema } from "./types";
 import { getAppMetadata, hasCommerceWorkflow, hasCommerceBookingAliases, openApiEcommerceMetadata, pascalCase } from "./utils";
+import { fieldConstraintRules, inferredConstraintMessage, normalizeConstraints, type FieldConstraintRule } from "./constraints";
 
 const CRUD_ACTIONS = new Set(["read", "create", "update", "delete"]);
 const NAV_GROUPS: Record<string, { label: string; displayPriority: number; internal?: boolean }> = {
@@ -373,7 +374,8 @@ function openApiWorkflowMetadata(schema: Schema): Record<string, unknown> | null
 
 function openApiValidationMetadata(schema: Schema): Record<string, unknown> | null {
   const logicalConstraints: Record<string, Record<string, unknown>> = {};
-  for (const [entity, constraints] of Object.entries(schema.constraints || {})) {
+  const normalizedConstraints = normalizeConstraints(schema.constraints, schema.tables);
+  for (const [entity, constraints] of Object.entries(normalizedConstraints)) {
     logicalConstraints[entity] = {};
     for (const [name, constraint] of Object.entries(constraints)) {
       logicalConstraints[entity][name] = {
@@ -385,7 +387,7 @@ function openApiValidationMetadata(schema: Schema): Record<string, unknown> | nu
         })),
         ...(constraint.expression ? { expression: constraint.expression } : {}),
         ...(constraint.condition ? { condition: constraint.condition } : {}),
-        ...(constraint.message ? { message: constraint.message } : {}),
+        message: inferredConstraintMessage(schema.tables, entity, name, constraint),
         enforcement: constraint.enforcement || "auto",
       };
     }
@@ -563,8 +565,8 @@ function columnRelationshipMetadata(col: Column): Record<string, unknown> | null
   return extension;
 }
 
-function columnValueSchema(col: Column, options: { includeDefault?: boolean } = {}): Record<string, unknown> {
-  const validation = col.validation || {};
+function columnValueSchema(col: Column, options: { includeDefault?: boolean; validation?: FieldConstraintRule } = {}): Record<string, unknown> {
+  const validation = options.validation || {};
   const metadata = col.metadata || {};
   const type = columnOpenApiType(col);
   const schema: Record<string, unknown> = { ...type };
@@ -676,6 +678,7 @@ export function genOpenAPI(schema: Schema): string {
   const navigationMetadata = openApiNavigationMetadata(schema);
   const paths: Record<string, unknown> = {};
   const schemas: Record<string, unknown> = {};
+  const constraintRules = fieldConstraintRules(schema.tables, schema.constraints);
 
   // Error schema
   schemas.Error = {
@@ -835,7 +838,7 @@ export function genOpenAPI(schema: Schema): string {
     const properties: Record<string, unknown> = {};
     const required: string[] = [];
     for (const [col, c] of Object.entries(cols)) {
-      properties[col] = columnValueSchema(c, { includeDefault: true });
+      properties[col] = columnValueSchema(c, { includeDefault: true, validation: constraintRules[entity]?.[col] });
       if (c.required || c.pk) required.push(col);
     }
     for (const [field, derived] of Object.entries(schema.derived?.[entity] || {})) {
@@ -849,7 +852,7 @@ export function genOpenAPI(schema: Schema): string {
     const inputRequired: string[] = [];
     for (const [col, c] of Object.entries(cols)) {
       if (c.pk && c.auto) continue;
-      inputProps[col] = columnValueSchema(c);
+      inputProps[col] = columnValueSchema(c, { validation: constraintRules[entity]?.[col] });
       if (c.required && c.default === null && !createRelationshipFields.has(col)) inputRequired.push(col);
     }
     schemas[`${Entity}Input`] = { type: "object", properties: inputProps, required: inputRequired };

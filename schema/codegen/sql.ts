@@ -1,6 +1,7 @@
 import assert from "assert/strict";
-import type { Column, Constraints, Expr, Indexes, Tables } from "./types";
+import type { Column, Constraints, Expr, Indexes, NormalizedConstraints, Tables } from "./types";
 import { quoteReserved } from "./utils";
+import { normalizeConstraints } from "./constraints";
 
 export function sqlType(col: Column, availableTables?: string[]): string {
   const parts = [col.type.toUpperCase()];
@@ -92,7 +93,7 @@ function mergeIndexes(explicitIndexes: Indexes, inferredIndexes: Indexes): Index
   return merged;
 }
 
-function indexesForUniqueConstraints(tables: Tables, constraints: Constraints = {}): Indexes {
+function indexesForUniqueConstraints(tables: Tables, constraints: NormalizedConstraints = {}): Indexes {
   const indexes: Indexes = {};
   for (const [table, tableConstraints] of Object.entries(constraints)) {
     const cols = tables[table];
@@ -113,18 +114,63 @@ function indexesForUniqueConstraints(tables: Tables, constraints: Constraints = 
   return indexes;
 }
 
-function dbCheckConstraintsForTable(table: string, cols: Record<string, Column>, constraints: Constraints = {}): string[] {
+function dbCheckConstraintsForTable(table: string, cols: Record<string, Column>, constraints: NormalizedConstraints = {}): string[] {
   const checks: string[] = [];
   for (const [name, constraint] of Object.entries(constraints[table] || {})) {
-    if (constraint.kind !== "check") continue;
+    if (!databaseCheckConstraint(constraint)) continue;
     if (constraint.enforcement === "application") continue;
-    assert(constraint.expression, `Constraint ${name} on ${table} requires an expression`);
-    const expression = compileSqlExpr(constraint.expression, cols);
+    const expression = sqlConstraintExpression(name, table, cols, constraint);
     const condition = constraint.condition ? compileSqlExpr(constraint.condition, cols) : "";
     const check = condition ? `((NOT ${condition}) OR ${expression})` : expression;
     checks.push(`    CONSTRAINT ${quoteReserved(`${table}_${name}`)} CHECK (${check})`);
   }
   return checks;
+}
+
+function databaseCheckConstraint(constraint: NormalizedConstraint): boolean {
+  return constraint.kind === "check"
+    || constraint.kind === "enum"
+    || constraint.kind === "length"
+    || constraint.kind === "range";
+}
+
+function sqlConstraintExpression(
+  name: string,
+  table: string,
+  cols: Record<string, Column>,
+  constraint: NormalizedConstraint,
+): string {
+  if (constraint.kind === "check") {
+    assert(constraint.expression, `Constraint ${name} on ${table} requires an expression`);
+    return compileSqlExpr(constraint.expression, cols);
+  }
+
+  assert(constraint.field, `Constraint ${name} on ${table} requires a field`);
+  assert(constraint.field.table === table, `Constraint ${name} on ${table} references non-local field: ${constraint.field.table}.${constraint.field.field}`);
+  assert(cols[constraint.field.field], `Constraint ${name} on ${table} references non-existent column: ${constraint.field.field}`);
+  const field = quoteReserved(constraint.field.field);
+
+  if (constraint.kind === "enum") {
+    const values = constraint.values || [];
+    assert(values.length > 0, `Constraint ${name} on ${table} requires at least one enum value`);
+    return `(${field} IN (${values.map(sqlLiteral).join(", ")}))`;
+  }
+  if (constraint.kind === "length") {
+    const parts: string[] = [];
+    if (constraint.min !== null && constraint.min !== undefined) parts.push(`length(${field}) >= ${sqlLiteral(constraint.min)}`);
+    if (constraint.max !== null && constraint.max !== undefined) parts.push(`length(${field}) <= ${sqlLiteral(constraint.max)}`);
+    assert(parts.length > 0, `Constraint ${name} on ${table} requires min or max`);
+    return `(${parts.join(" AND ")})`;
+  }
+  if (constraint.kind === "range") {
+    const parts: string[] = [];
+    if (constraint.min !== null && constraint.min !== undefined) parts.push(`${field} >= ${sqlLiteral(constraint.min)}`);
+    if (constraint.max !== null && constraint.max !== undefined) parts.push(`${field} <= ${sqlLiteral(constraint.max)}`);
+    assert(parts.length > 0, `Constraint ${name} on ${table} requires min or max`);
+    return `(${parts.join(" AND ")})`;
+  }
+
+  throw new Error(`Unsupported SQL constraint kind: ${constraint.kind}`);
 }
 
 function compileSqlExpr(expr: Expr, cols: Record<string, Column>): string {
@@ -191,7 +237,8 @@ function genIndexSQL(tables: Tables, indexes: Indexes): string[] {
 }
 
 export function genSQL(tables: Tables, constraints: Constraints = {}): string {
-  const constraintIndexes = indexesForUniqueConstraints(tables, constraints);
+  const normalizedConstraints = normalizeConstraints(constraints, tables);
+  const constraintIndexes = indexesForUniqueConstraints(tables, normalizedConstraints);
   const allIndexes = mergeIndexes(constraintIndexes, inferPerformanceIndexes(tables, constraintIndexes));
   // Topological sort: tables with no FK deps first
   const tableNames = Object.keys(tables);
@@ -226,7 +273,7 @@ export function genSQL(tables: Tables, constraints: Constraints = {}): string {
     for (const [col, c] of Object.entries(cols)) {
       defs.push(`    ${col} ${sqlType(c, tableNames)}`);
     }
-    defs.push(...dbCheckConstraintsForTable(table, cols, constraints));
+    defs.push(...dbCheckConstraintsForTable(table, cols, normalizedConstraints));
     const tableName = quoteReserved(table);
     stmts.push(`CREATE TABLE IF NOT EXISTS ${tableName} (\n${defs.join(",\n")}\n);`);
   }

@@ -1,6 +1,10 @@
 { config, lib, ... }:
 let
   E = import ../lib/expr.nix;
+  material = config.refs.production_material;
+  materialStatus = config.values.production_material.status;
+  version = config.refs.material_version;
+  versionStatus = config.values.material_version.status;
 in
 {
   tables.production_material = {
@@ -26,7 +30,7 @@ in
         placeholder = "Current vocal score";
         displayPriority = 20;
       };
-      validation.maxLength = 160;
+      constraints.length.max = 160;
     };
     kind = {
       type = "text";
@@ -35,7 +39,7 @@ in
         label = "Kind";
         displayPriority = 30;
       };
-      validation.enum = [ "score" "script" "cut_list" "rehearsal_note" "briefing" "media" "other" ];
+      constraints.enum = [ "score" "script" "cut_list" "rehearsal_note" "briefing" "media" "other" ];
     };
     visibility = {
       type = "text";
@@ -44,7 +48,7 @@ in
         label = "Visibility";
         displayPriority = 40;
       };
-      validation.enum = [ "private" "participants" "public" ];
+      constraints.enum = [ "private" "participants" "public" ];
     };
     status = {
       type = "text";
@@ -53,7 +57,7 @@ in
         label = "Status";
         displayPriority = 50;
       };
-      validation.enum = [ "draft" "current" "archived" ];
+      constraints.enum = [ "draft" "current" "archived" ];
     };
     description = {
       type = "text";
@@ -106,7 +110,7 @@ in
         placeholder = "v1";
         displayPriority = 20;
       };
-      validation.maxLength = 80;
+      constraints.length.max = 80;
     };
     storage_uri = {
       type = "text";
@@ -132,7 +136,7 @@ in
         label = "Status";
         displayPriority = 50;
       };
-      validation.enum = [ "draft" "current" "superseded" "archived" ];
+      constraints.enum = [ "draft" "current" "superseded" "archived" ];
     };
     notes = {
       type = "text";
@@ -164,13 +168,11 @@ in
     };
   };
 
-  constraints.material_version.unique_material_version = {
-    kind = "unique";
-    fields = [
-      config.refs.material_version.material_id
-      config.refs.material_version.version_label
+  constraints.material_version.unique.unique_material_version = {
+    fields = with config.refs.material_version; [
+      material_id
+      version_label
     ];
-    message = "Material version labels must be unique per material.";
   };
 
   audit.entities.production_material = {
@@ -201,14 +203,16 @@ in
       workflow = {
         group = "materialsLifecycle";
         transitions = [{
-          field = config.refs.production_material.status;
-          from = [ "draft" ];
-          to = "current";
+          field = material.status;
+          from = [ materialStatus.draft ];
+          to = materialStatus.current;
         }];
         audit.summary = "Published production material";
       };
-      guard = E.eq (E.f "status") (E.lit "draft");
-      set = { status = "current"; };
+      guard = E.eq (E.f material.status) (E.lit materialStatus.draft);
+      set = [
+        { field = material.status; value = materialStatus.current; }
+      ];
       effects = [
         { notify = { channel = "email"; template = "material_published"; to = "participants"; }; }
       ];
@@ -223,14 +227,16 @@ in
       workflow = {
         group = "materialsLifecycle";
         transitions = [{
-          field = config.refs.production_material.status;
-          from = [ "draft" "current" ];
-          to = "archived";
+          field = material.status;
+          from = with materialStatus; [ draft current ];
+          to = materialStatus.archived;
         }];
         audit.summary = "Archived production material";
       };
-      guard = E.ne (E.f "status") (E.lit "archived");
-      set = { status = "archived"; };
+      guard = E.ne (E.f material.status) (E.lit materialStatus.archived);
+      set = [
+        { field = material.status; value = materialStatus.archived; }
+      ];
     };
   };
 
@@ -244,14 +250,16 @@ in
       workflow = {
         group = "materialsLifecycle";
         transitions = [{
-          field = config.refs.material_version.status;
-          from = [ "draft" ];
-          to = "current";
+          field = version.status;
+          from = [ versionStatus.draft ];
+          to = versionStatus.current;
         }];
         audit.summary = "Marked material version current";
       };
-      guard = E.eq (E.f "status") (E.lit "draft");
-      set = { status = "current"; };
+      guard = E.eq (E.f version.status) (E.lit versionStatus.draft);
+      set = [
+        { field = version.status; value = versionStatus.current; }
+      ];
     };
 
     supersede = {
@@ -263,14 +271,16 @@ in
       workflow = {
         group = "materialsLifecycle";
         transitions = [{
-          field = config.refs.material_version.status;
-          from = [ "current" ];
-          to = "superseded";
+          field = version.status;
+          from = [ versionStatus.current ];
+          to = versionStatus.superseded;
         }];
         audit.summary = "Superseded material version";
       };
-      guard = E.eq (E.f "status") (E.lit "current");
-      set = { status = "superseded"; };
+      guard = E.eq (E.f version.status) (E.lit versionStatus.current);
+      set = [
+        { field = version.status; value = versionStatus.superseded; }
+      ];
     };
 
     archive = {
@@ -282,14 +292,16 @@ in
       workflow = {
         group = "materialsLifecycle";
         transitions = [{
-          field = config.refs.material_version.status;
-          from = [ "draft" "current" "superseded" ];
-          to = "archived";
+          field = version.status;
+          from = with versionStatus; [ draft current superseded ];
+          to = versionStatus.archived;
         }];
         audit.summary = "Archived material version";
       };
-      guard = E.ne (E.f "status") (E.lit "archived");
-      set = { status = "archived"; };
+      guard = E.ne (E.f version.status) (E.lit versionStatus.archived);
+      set = [
+        { field = version.status; value = versionStatus.archived; }
+      ];
     };
   };
 }

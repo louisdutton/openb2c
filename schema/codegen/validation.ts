@@ -1,4 +1,5 @@
-import type { Cascade, Column, Expr, FieldRef, Operation, Schema, SeedValue, Tables } from "./types";
+import type { Cascade, Column, ConstraintEnforcement, Expr, FieldRef, Operation, Schema, SeedValue, Tables } from "./types";
+import { normalizeConstraints } from "./constraints";
 
 export interface SchemaDiagnostic {
   path: string;
@@ -129,7 +130,7 @@ function validateColumns(schema: Schema, diagnostics: SchemaDiagnostic[]): void 
         validateReference(tables, col.references, `tables.${table}.${field}.references`, diagnostics);
       }
       validateColumnMetadata(table, field, col, diagnostics);
-      validateColumnRules(table, field, col, diagnostics);
+      validateColumnConstraints(table, field, col, diagnostics);
       validateColumnRelationship(schema, table, field, col, diagnostics);
     }
   }
@@ -188,58 +189,23 @@ function validateColumnMetadata(table: string, field: string, col: Column, diagn
   }
 }
 
-function validateColumnRules(table: string, field: string, col: Column, diagnostics: SchemaDiagnostic[]): void {
-  const validation = col.validation;
-  if (!validation) return;
-
-  if (
-    validation.minLength !== null &&
-    validation.minLength !== undefined &&
-    validation.minLength < 0
-  ) {
-    add(diagnostics, `tables.${table}.${field}.validation.minLength`, "must be greater than or equal to 0");
-  }
-
-  if (
-    validation.maxLength !== null &&
-    validation.maxLength !== undefined &&
-    validation.maxLength < 0
-  ) {
-    add(diagnostics, `tables.${table}.${field}.validation.maxLength`, "must be greater than or equal to 0");
-  }
-
-  if (
-    validation.minLength !== null &&
-    validation.minLength !== undefined &&
-    validation.maxLength !== null &&
-    validation.maxLength !== undefined &&
-    validation.minLength > validation.maxLength
-  ) {
-    add(diagnostics, `tables.${table}.${field}.validation`, "minLength must be less than or equal to maxLength");
-  }
-
-  if (
-    validation.minimum !== null &&
-    validation.minimum !== undefined &&
-    validation.maximum !== null &&
-    validation.maximum !== undefined &&
-    validation.minimum > validation.maximum
-  ) {
-    add(diagnostics, `tables.${table}.${field}.validation`, "minimum must be less than or equal to maximum");
-  }
-
-  if (validation.pattern) {
+function validateColumnConstraints(table: string, field: string, col: Column, diagnostics: SchemaDiagnostic[]): void {
+  const constraints = col.constraints;
+  if (!constraints) return;
+  const path = `tables.${table}.${field}.constraints`;
+  validateBounds(`${path}.length`, constraints.length?.min, constraints.length?.max, "min", "max", diagnostics);
+  validateBounds(`${path}.range`, constraints.range?.min, constraints.range?.max, "min", "max", diagnostics);
+  if (constraints.pattern) {
     try {
-      new RegExp(validation.pattern);
+      new RegExp(constraints.pattern);
     } catch {
-      add(diagnostics, `tables.${table}.${field}.validation.pattern`, "must be a valid JavaScript regular expression");
+      add(diagnostics, `${path}.pattern`, "must be a valid JavaScript regular expression");
     }
   }
-
-  if ((col.type === "integer" || col.type === "real" || col.type === "float" || col.type === "number") && validation.enum?.length) {
-    for (const value of validation.enum) {
+  if (numericColumn(col) && constraints.enum?.length) {
+    for (const value of constraints.enum) {
       if (!Number.isFinite(Number(value))) {
-        add(diagnostics, `tables.${table}.${field}.validation.enum`, `contains non-numeric value ${JSON.stringify(value)} for numeric field`);
+        add(diagnostics, `${path}.enum`, `contains non-numeric value ${JSON.stringify(value)} for numeric field`);
       }
     }
   }
@@ -273,36 +239,45 @@ function validateRelationships(schema: Schema, diagnostics: SchemaDiagnostic[]):
 }
 
 function validateConstraints(schema: Schema, diagnostics: SchemaDiagnostic[]): void {
-  for (const [entity, constraints] of Object.entries(schema.constraints || {})) {
+  const allowedKinds = ["unique", "check"];
+  for (const [entity, group] of Object.entries(schema.constraints || {})) {
     if (!tableExists(schema.tables, entity)) {
       add(diagnostics, `constraints.${entity}`, `references unknown entity ${JSON.stringify(entity)}`);
       continue;
     }
-    for (const [name, constraint] of Object.entries(constraints)) {
-      const path = `constraints.${entity}.${name}`;
-      if (!["unique", "check"].includes(constraint.kind)) {
-        add(diagnostics, `${path}.kind`, "must be one of unique or check");
+    for (const kind of Object.keys(group)) {
+      if (!allowedKinds.includes(kind)) {
+        add(diagnostics, `constraints.${entity}.${kind}`, "must be one of unique or check");
       }
-      if (constraint.enforcement && !["auto", "database", "application", "both"].includes(constraint.enforcement)) {
-        add(diagnostics, `${path}.enforcement`, "must be one of auto, database, application, or both");
-      }
-      if (!constraint.fields || constraint.fields.length === 0) {
-        add(diagnostics, `${path}.fields`, "must include at least one field");
-      }
+    }
+    const names = new Set<string>();
+    for (const [name, constraint] of Object.entries(group.unique || {})) {
+      const path = `constraints.${entity}.unique.${name}`;
+      if (names.has(name)) add(diagnostics, path, "duplicates another constraint name on this entity");
+      names.add(name);
+      validateEnforcement(constraint.enforcement, path, diagnostics);
+      if (!constraint.fields || constraint.fields.length === 0) add(diagnostics, `${path}.fields`, "must include at least one field");
       for (const [index, field] of (constraint.fields || []).entries()) {
         validateFieldRef(schema, field, `${path}.fields.${index}`, diagnostics, entity);
       }
-      if (constraint.kind === "unique" && constraint.expression) {
-        add(diagnostics, `${path}.expression`, "is only supported for check constraints");
+      if (constraint.condition) {
+        validateConstraintExpr(schema, entity, constraint.condition, `${path}.condition`, diagnostics);
       }
-      if (constraint.kind === "check") {
-        if (!constraint.message) add(diagnostics, `${path}.message`, "is required");
-        validateConstraintExpr(schema, entity, constraint.expression, `${path}.expression`, diagnostics);
-        const declaredFields = new Set((constraint.fields || []).filter(field => field.table === entity).map(field => field.field));
-        for (const field of expressionFields(constraint.expression)) {
-          if (!declaredFields.has(field)) {
-            add(diagnostics, `${path}.fields`, `must include expression field ${entity}.${field}`);
-          }
+    }
+    for (const [name, constraint] of Object.entries(group.check || {})) {
+      const path = `constraints.${entity}.check.${name}`;
+      if (names.has(name)) add(diagnostics, path, "duplicates another constraint name on this entity");
+      names.add(name);
+      validateEnforcement(constraint.enforcement, path, diagnostics);
+      if (!constraint.fields || constraint.fields.length === 0) add(diagnostics, `${path}.fields`, "must include at least one field");
+      for (const [index, field] of (constraint.fields || []).entries()) {
+        validateFieldRef(schema, field, `${path}.fields.${index}`, diagnostics, entity);
+      }
+      validateConstraintExpr(schema, entity, constraint.expression, `${path}.expression`, diagnostics);
+      const declaredFields = new Set((constraint.fields || []).filter(field => field.table === entity).map(field => field.field));
+      for (const field of expressionFields(constraint.expression)) {
+        if (!declaredFields.has(field)) {
+          add(diagnostics, `${path}.fields`, `must include expression field ${entity}.${field}`);
         }
       }
       if (constraint.condition) {
@@ -310,6 +285,39 @@ function validateConstraints(schema: Schema, diagnostics: SchemaDiagnostic[]): v
       }
     }
   }
+}
+
+function validateEnforcement(enforcement: ConstraintEnforcement | undefined, path: string, diagnostics: SchemaDiagnostic[]): void {
+  if (enforcement && !["auto", "database", "application", "both"].includes(enforcement)) {
+    add(diagnostics, `${path}.enforcement`, "must be one of auto, database, application, or both");
+  }
+}
+
+function validateBounds(
+  path: string,
+  min: number | null | undefined,
+  max: number | null | undefined,
+  minName: string,
+  maxName: string,
+  diagnostics: SchemaDiagnostic[],
+): void {
+  if (min === null || min === undefined) {
+    if (max === null || max === undefined) return;
+  } else if (min < 0) {
+    add(diagnostics, `${path}.${minName}`, "must be greater than or equal to 0");
+  }
+
+  if (max !== null && max !== undefined && max < 0) {
+    add(diagnostics, `${path}.${maxName}`, "must be greater than or equal to 0");
+  }
+
+  if (min !== null && min !== undefined && max !== null && max !== undefined && min > max) {
+    add(diagnostics, path, `${minName} must be less than or equal to ${maxName}`);
+  }
+}
+
+function numericColumn(col: Column): boolean {
+  return col.type === "integer" || col.type === "real" || col.type === "float" || col.type === "number";
 }
 
 function validateAudit(schema: Schema, diagnostics: SchemaDiagnostic[]): void {
@@ -383,7 +391,7 @@ function seedConflictColumns(schema: Schema, table: string, columns: Record<stri
     .find(([field, column]) => column.unique && hasOwn(row, field));
   if (unique) return [unique[0]];
 
-  for (const constraint of Object.values(schema.constraints?.[table] || {})) {
+  for (const constraint of Object.values(normalizeConstraints(schema.constraints, schema.tables)[table] || {})) {
     if (constraint.kind !== "unique" || constraint.condition || constraint.enforcement === "application") continue;
     const fields = constraint.fields.filter(field => field.table === table).map(field => field.field);
     if (fields.length > 0 && fields.length === constraint.fields.length && fields.every(field => hasOwn(row, field))) {

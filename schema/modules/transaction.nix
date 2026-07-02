@@ -1,6 +1,10 @@
 { config, lib, ... }:
 let
   E = import ../lib/expr.nix;
+  F = config.refs.transaction;
+  V = config.values.transaction;
+  ticket = config.refs.ticket;
+  ticketStatus = config.values.ticket.status;
 in
 {
   tables.transaction = {
@@ -16,16 +20,18 @@ in
     };
     amount_pence = { type = "integer"; required = true; };
     type = { type = "text"; required = true; };  # purchase, refund, donation
-    status = { type = "text"; default = "'pending'"; };  # pending, completed, failed, refunded
+    status = {
+      type = "text";
+      default = "'pending'";
+      constraints.enum = [ "pending" "completed" "failed" "refunded" ];
+    };
     reference = { type = "text"; };  # External payment reference
     client = { type = "text"; default = "'web'"; };  # web, mcp, api
     created_at = { type = "text"; default = "CURRENT_TIMESTAMP"; };
   };
 
-  constraints.transaction.unique_reference = {
-    kind = "unique";
-    fields = [ config.refs.transaction.reference ];
-    message = "Transaction reference must be unique.";
+  constraints.transaction.unique.unique_reference = {
+    fields = with config.refs.transaction; [ reference ];
   };
 
   # Link tickets to transactions
@@ -49,13 +55,11 @@ in
     };
   };
 
-  constraints.transaction_ticket.unique_pair = {
-    kind = "unique";
-    fields = [
-      config.refs.transaction_ticket.transaction_id
-      config.refs.transaction_ticket.ticket_id
+  constraints.transaction_ticket.unique.unique_pair = {
+    fields = with config.refs.transaction_ticket; [
+      transaction_id
+      ticket_id
     ];
-    message = "A ticket can only appear once in the same transaction.";
   };
 
   workflows.groups.paymentLifecycle = {
@@ -87,18 +91,22 @@ in
       workflow = {
         group = "paymentLifecycle";
         transitions = [{
-          field = config.refs.transaction.status;
-          from = [ "pending" ];
-          to = "completed";
+          field = F.status;
+          from = [ V.status.pending ];
+          to = V.status.completed;
         }];
         audit.summary = "Completed transaction";
       };
-      guard = E.eq (E.f "status") (E.lit "pending");
-      set = { status = "completed"; };
+      guard = E.eq (E.f F.status) (E.lit V.status.pending);
+      set = [
+        { field = F.status; value = V.status.completed; }
+      ];
       cascade = [{
         entity = "ticket";
         via = "transaction_ticket";
-        set = { status = "confirmed"; };
+        set = [
+          { field = ticket.status; value = ticketStatus.confirmed; }
+        ];
       }];
       effects = [
         { notify = { channel = "email"; template = "receipt"; }; }
@@ -121,18 +129,22 @@ in
       workflow = {
         group = "paymentLifecycle";
         transitions = [{
-          field = config.refs.transaction.status;
-          from = [ "pending" ];
-          to = "failed";
+          field = F.status;
+          from = [ V.status.pending ];
+          to = V.status.failed;
         }];
         audit.summary = "Failed transaction";
       };
-      guard = E.eq (E.f "status") (E.lit "pending");
-      set = { status = "failed"; };
+      guard = E.eq (E.f F.status) (E.lit V.status.pending);
+      set = [
+        { field = F.status; value = V.status.failed; }
+      ];
       cascade = [{
         entity = "ticket";
         via = "transaction_ticket";
-        set = { status = "cancelled"; };
+        set = [
+          { field = ticket.status; value = ticketStatus.cancelled; }
+        ];
       }];
     };
 
@@ -151,9 +163,9 @@ in
       workflow = {
         group = "paymentLifecycle";
         transitions = [{
-          field = config.refs.transaction.status;
-          from = [ "completed" ];
-          to = "refunded";
+          field = F.status;
+          from = [ V.status.completed ];
+          to = V.status.refunded;
         }];
         audit.summary = "Refunded transaction";
         confirmation = {
@@ -164,12 +176,16 @@ in
           severity = "danger";
         };
       };
-      guard = E.eq (E.f "status") (E.lit "completed");
-      set = { status = "refunded"; };
+      guard = E.eq (E.f F.status) (E.lit V.status.completed);
+      set = [
+        { field = F.status; value = V.status.refunded; }
+      ];
       cascade = [{
         entity = "ticket";
         via = "transaction_ticket";
-        set = { status = "cancelled"; };
+        set = [
+          { field = ticket.status; value = ticketStatus.cancelled; }
+        ];
       }];
       effects = [
         { notify = { channel = "email"; template = "refund_confirmation"; }; }

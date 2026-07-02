@@ -135,10 +135,10 @@ describe("seed data generation", () => {
       },
       constraints: {
         product: {
-          unique_sku: {
-            kind: "unique",
-            fields: [{ table: "product", field: "sku", references: null }],
-            message: "SKU must be unique.",
+          unique: {
+            unique_sku: {
+              fields: [{ table: "product", field: "sku", references: null }],
+            },
           },
         },
       },

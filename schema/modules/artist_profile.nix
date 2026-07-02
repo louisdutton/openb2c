@@ -1,6 +1,7 @@
 { config, lib, ... }:
 let
   E = import ../lib/expr.nix;
+  F = config.refs.artist_profile;
 in
 {
   tables.artist_profile = {
@@ -58,19 +59,21 @@ in
     read.public = true;
 
     deactivate = {
-      guard = E.eq (E.f "active") (E.lit 1);
-      set = { active = "0"; };
+      guard = E.eq (E.f F.active) (E.lit 1);
+      set = [
+        { field = F.active; value = "0"; }
+      ];
     };
 
     activate = {
-      guard = E.eq (E.f "active") (E.lit 0);
-      set = { active = "1"; };
+      guard = E.eq (E.f F.active) (E.lit 0);
+      set = [
+        { field = F.active; value = "1"; }
+      ];
     };
   };
 
-  constraints.artist_profile.unique_user = {
-    kind = "unique";
-    fields = [ config.refs.artist_profile.user_id ];
-    message = "A user can only have one artist profile.";
+  constraints.artist_profile.unique.unique_user = {
+    fields = with config.refs.artist_profile; [ user_id ];
   };
 }
