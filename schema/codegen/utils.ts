@@ -105,11 +105,23 @@ export function openApiEcommerceMetadata(schema: Schema): unknown | undefined {
     order: {
       entity: ecommerce.order.entity,
       user: ecommerce.order.user,
+      status: ecommerce.order.status,
+      amount: ecommerce.order.amount,
+      currency: ecommerce.order.currency,
+      expiresAt: ecommerce.order.expiresAt,
+      paymentDeadlineAt: ecommerce.order.paymentDeadlineAt,
+      paymentReference: ecommerce.order.paymentReference,
     },
     lineItem: {
       entity: ecommerce.lineItem.entity,
+      catalogItem: ecommerce.lineItem.catalogItem,
+      user: ecommerce.lineItem.user,
+      price: ecommerce.lineItem.price,
+      status: ecommerce.lineItem.status,
+      quantity: ecommerce.lineItem.quantity,
       options: ecommerce.lineItem.options,
     },
+    orderLine: ecommerce.orderLine,
     transaction: {
       entity: ecommerce.transaction.entity,
     },

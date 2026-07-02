@@ -206,6 +206,9 @@ describe("generated UI web components", () => {
     expect(adminNav).toContain("_syncCollapsedState");
     expect(authMenu).toContain("#/login");
     expect(authMenu).toContain("#/account");
+    expect(authMenu).toContain("_profileFor");
+    expect(authMenu).toContain("account-avatar");
+    expect(authMenu).not.toContain("User #");
     expect(authMenu).not.toContain("./ob-auth-panel");
     expect(authMenu).not.toContain('inputmode="email"');
     expect(authMenu).not.toContain("setCertificateAuth");
@@ -218,7 +221,11 @@ describe("generated UI web components", () => {
     expect(authPage).toContain("./ob-account-summary");
     expect(authPage).toContain("<ob-auth-panel hide-header");
     expect(accountSummary).toContain("/api/users/${this._userId}");
-    expect(accountSummary).toContain("user_id=${encodeURIComponent");
+    expect(accountSummary).toContain("_loadPurchases");
+    expect(accountSummary).toContain("getEcommerceConfig");
+    expect(accountSummary).toContain("/commerce/catalog");
+    expect(accountSummary).toContain("lineItem?.user");
+    expect(accountSummary).not.toContain("Activity");
     expect(accountSummary).toContain('data-form="profile"');
     expect(entityList).toContain("listSchemaFields");
     expect(entityList).toContain("filterableSchemaFields");
@@ -404,22 +411,31 @@ describe("generated UI web components", () => {
     expect(obApi).toContain("restoreAuthContext");
   });
 
-  test("public commerce actions keep the primary path visually last", async () => {
+  test("public topbar exposes catalog, cart, and account actions", async () => {
     const publicApp = await Bun.file(join(UI_DIR, "components", "ob-app.ts")).text();
     const commerceComponent = await Bun.file(join(UI_DIR, "components", "ob-commerce.ts")).text();
     const publicStyles = genPublicStylesheet();
 
+    const catalogIndex = publicApp.indexOf('data-action="commerce"');
+    const cartIndex = publicApp.indexOf('data-action="cart"');
     const accountIndex = publicApp.indexOf("<ob-auth-menu></ob-auth-menu>");
-    const checkoutIndex = publicApp.indexOf('<button class="nav-button" type="button" data-action="commerce" hidden>Browse</button>');
+    expect(catalogIndex).toBeGreaterThan(-1);
     expect(accountIndex).toBeGreaterThan(-1);
-    expect(checkoutIndex).toBeGreaterThan(accountIndex);
+    expect(cartIndex).toBeGreaterThan(accountIndex);
+    expect(cartIndex).toBeLessThan(catalogIndex);
+    expect(publicApp).toContain('aria-label="Cart"');
+    expect(publicApp).toContain('location.hash !== "#/cart"');
     expect(publicApp).toContain("commerceActionLabel(api, catalogEntity)");
     expect(publicApp).toContain("return \"What's on\";");
     expect(publicApp).toContain("return `Browse ${pluralDisplayName(catalogEntity)}`;");
     expect(commerceComponent).toContain('class="catalog-section"');
     expect(commerceComponent).toContain("this._renderItemMedia(first, key)");
+    expect(commerceComponent).toContain("formatTemporalRange(item[startField], item[endField])");
     expect(commerceComponent).toContain("this._cardTemporalLabel(items, config)");
     expect(commerceComponent).toContain("temporalSortValue");
+    expect(commerceComponent).toContain('const title = this._view === "cart" ? "Cart" : this._catalogTitle(catalogEntity);');
+    expect(commerceComponent).toContain('if (this._view === "cart" || this._reviewingCart) return this._renderReviewStep(api, config, lookups);');
+    expect(publicStyles).toContain(":host(ob-commerce) .selector-meta{display:grid;gap:4px;color:var(--ob-text-muted);font-size:13px;font-weight:400");
     expect(commerceComponent).toContain("Select ${escapeHtml(this._itemTitle(item, config, lookups))}");
     expect(commerceComponent).not.toContain("data.selectedGroup");
     expect(commerceComponent).not.toContain("data.selectedItemId");

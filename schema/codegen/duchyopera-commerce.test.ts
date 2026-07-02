@@ -230,6 +230,12 @@ describe("Duchy Opera commerce workflow", () => {
     expect(mcp).not.toContain("reserve_booking");
     expect(effects).not.toContain('"booking.reserved"');
     expect(openapi.paths["/commerce/bookings/reserve"]).toBeUndefined();
+    expect(openapi.components.schemas.CommerceCartItemOptions.properties.ticket_type).toMatchObject({
+      type: "string",
+      enum: ["standard", "concession", "patron", "vip"],
+      default: "standard",
+    });
+    expect(openapi.components.schemas.CommerceCartItemOptions.properties.seat).toBeUndefined();
   });
 
   test("commerce browser UI derives checkout user from auth context", async () => {
@@ -277,6 +283,8 @@ describe("Duchy Opera commerce workflow", () => {
       field: { table: "venue", field: "capacity" },
       via: { table: "performance", field: "venue_id" },
     });
+    expect(Object.keys(commerce?.lineItem.options || {})).toEqual(["ticket_type"]);
+    expect(commerce?.lineItem.options.ticket_type.choices).toEqual(["standard", "concession", "patron", "vip"]);
 
     const dir = writeGenerated(schema);
     const dbPath = join(dir, "duchy-commerce.sqlite");
@@ -424,7 +432,7 @@ describe("Duchy Opera commerce workflow", () => {
               quantity: 1,
               unit_amount_pence: 2500,
               amount_pence: 2500,
-              options: { ticket_type: "standard", seat: null },
+              options: { ticket_type: "standard" },
             },
             {
               id: checkedOut.line_item_ids[1],
@@ -433,7 +441,7 @@ describe("Duchy Opera commerce workflow", () => {
               quantity: 1,
               unit_amount_pence: 2500,
               amount_pence: 2500,
-              options: { ticket_type: "standard", seat: null },
+              options: { ticket_type: "standard" },
             },
           ],
         },

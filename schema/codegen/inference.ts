@@ -404,6 +404,7 @@ function commerceOptions(schema: Schema, entity: string, excluded: Set<string>):
   for (const [field, col] of Object.entries(schema.tables[entity] || {})) {
     if (excluded.has(field)) continue;
     if (field === "id" || field === "created_at" || field === "updated_at" || parseReference(col.references)) continue;
+    if (!isPublicCommerceOption(col)) continue;
     options[field] = {
       field: refFor(schema.tables, entity, field),
       type: col.type,
@@ -416,6 +417,15 @@ function commerceOptions(schema: Schema, entity: string, excluded: Set<string>):
     };
   }
   return options;
+}
+
+function isPublicCommerceOption(col: Column): boolean {
+  if (enumValues(col).length > 0) return true;
+  const numeric = col.type === "integer" || col.type === "real" || col.type === "float" || col.type === "number";
+  return numeric && (
+    col.constraints?.range?.min !== null && col.constraints?.range?.min !== undefined ||
+    col.constraints?.range?.max !== null && col.constraints?.range?.max !== undefined
+  );
 }
 
 function cleanDefault(value: string | null): string | null {

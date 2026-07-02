@@ -233,7 +233,7 @@ function commerceReport(schema: Schema): CommerceInferenceReport {
       ]),
       "catalog.groupBy": choice(config.catalog.groupBy.map(fieldName).filter(Boolean) as string[], "catalog grouping follows the inferred label field", config.catalog.groupBy.map(fieldEvidence)),
       "catalog.variantFields": choice(config.catalog.variantFields.map(fieldName).filter(Boolean) as string[], "variant fields are temporal/reference fields ordered by platform convention", config.catalog.variantFields.map(fieldEvidence)),
-      "lineItem.options": choice(Object.keys(config.lineItem.options).sort(), "checkout options are non-technical, non-FK line item fields", Object.keys(config.lineItem.options).sort()),
+      "lineItem.options": choice(Object.keys(config.lineItem.options).sort(), "checkout options are bounded non-technical line item fields; unbounded text is not exposed as public input", Object.keys(config.lineItem.options).sort()),
     },
     checkout: config.checkout,
   };

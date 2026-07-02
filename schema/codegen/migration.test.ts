@@ -110,6 +110,36 @@ describe("generated migrations", () => {
     }
   });
 
+  test("generated schema sync adds safe missing columns without a migration file", async () => {
+    const dir = writeGenerated();
+    const dbPath = join(dir, "schema-sync.sqlite");
+
+    const db = new Database(dbPath);
+    applySql(db, genSQL(oldTables));
+    db.query("INSERT INTO customer (email) VALUES (?)").run("maria@example.com");
+    db.close();
+
+    process.env.DB_PATH = dbPath;
+    process.env.PORT = "0";
+    process.env.AUTH_ENABLED = "false";
+    const { server } = await import(pathToFileURL(join(dir, "server.ts")).href);
+
+    try {
+      const migrated = new Database(dbPath);
+      const row = migrated.query<{ email: string; display_name: string }, []>(
+        "SELECT email, display_name FROM customer"
+      ).get();
+      migrated.close();
+
+      expect(row).toEqual({ email: "maria@example.com", display_name: "Anonymous" });
+    } finally {
+      server.stop(true);
+      delete process.env.DB_PATH;
+      delete process.env.PORT;
+      delete process.env.AUTH_ENABLED;
+    }
+  });
+
   test("MCP boot uses the same migration runtime as REST", async () => {
     const dir = writeGenerated();
     const dbPath = join(dir, "mcp.sqlite");

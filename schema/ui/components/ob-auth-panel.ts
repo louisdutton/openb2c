@@ -85,7 +85,7 @@ export class ObAuthPanel extends HTMLElement {
             <div class="panel-subtitle">${escapeHtml(this._subtitle(signedIn))}</div>
           </div>
         </div>` : ""}
-        ${signedIn ? this._renderSignedIn(api.authContext.userId) : this._renderSignInForm()}
+        ${signedIn ? this._renderSignedIn() : this._renderSignInForm()}
       </section>
     `;
 
@@ -107,13 +107,13 @@ export class ObAuthPanel extends HTMLElement {
     });
   }
 
-  private _renderSignedIn(userId: number | null): string {
+  private _renderSignedIn(): string {
     const returnTo = this._returnTo();
     return `
       <div class="session">
         <div class="session-box">
           <strong>Session</strong>
-          <span>User #${escapeHtml(userId)}</span>
+          <span>Signed in on this browser.</span>
         </div>
         <div class="actions">
           ${returnTo ? `<button type="button" class="primary" data-action="continue">Continue</button>` : ""}

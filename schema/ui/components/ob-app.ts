@@ -37,6 +37,11 @@ export class ObApp extends HTMLElement {
           </a>
           <div class="top-actions">
             <ob-auth-menu></ob-auth-menu>
+            <button class="cart-nav-button" type="button" data-action="cart" aria-label="Cart" title="Cart" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M7 18a2 2 0 1 0 0 4 2 2 0 0 0 0-4Zm10 0a2 2 0 1 0 .01 0H17ZM3 4h2l2.4 10.4a2 2 0 0 0 2 1.6h7.9a2 2 0 0 0 1.9-1.4L21 8H7" />
+              </svg>
+            </button>
             <button class="nav-button" type="button" data-action="commerce" hidden>Browse</button>
           </div>
         </header>
@@ -54,6 +59,9 @@ export class ObApp extends HTMLElement {
     this.querySelector<HTMLButtonElement>('[data-action="commerce"]')?.addEventListener("click", () => {
       navigateCatalog(catalogPath(ObApi.instance));
     });
+    this.querySelector<HTMLButtonElement>('[data-action="cart"]')?.addEventListener("click", () => {
+      if (location.hash !== "#/cart") location.hash = "#/cart";
+    });
 
     const api = this.querySelector("ob-api") as ObApi | null;
     if (!api) return;
@@ -63,6 +71,7 @@ export class ObApp extends HTMLElement {
       const logoEl = this.querySelector<HTMLImageElement>('[data-role="logo"]');
       const homeLink = this.querySelector<HTMLAnchorElement>('[data-action="home"]');
       const commerceButton = this.querySelector<HTMLButtonElement>('[data-action="commerce"]');
+      const cartButton = this.querySelector<HTMLButtonElement>('[data-action="cart"]');
       const title = apiTitle(api);
       const logo = apiLogo(api);
       const catalogEntity = api.getEcommerceConfig()?.catalog?.entity;
@@ -82,6 +91,7 @@ export class ObApp extends HTMLElement {
         commerceButton.hidden = !api.hasCommerceWorkflow();
         commerceButton.textContent = commerceActionLabel(api, catalogEntity);
       }
+      if (cartButton) cartButton.hidden = !api.hasCommerceWorkflow();
     });
   }
 }

@@ -235,7 +235,7 @@ export class ObApi extends HTMLElement {
       throw new Error(error.error || "sign in failed");
     }
 
-    const auth = await res.json() as AuthContext;
+    const auth = this._browserSessionAuth(await res.json() as AuthContext, this.authContext);
     this.setAuthContext(auth, token);
     if (options.persist === true) {
       await this._saveStoredBearerSession(auth, token);
@@ -268,7 +268,7 @@ export class ObApi extends HTMLElement {
       throw new Error(error.error || "sign in failed");
     }
 
-    const auth = await res.json() as AuthContext;
+    const auth = this._browserSessionAuth(await res.json() as AuthContext, this.authContext);
     this.authContext = auth;
     if (options.persist !== false) {
       await this._saveStoredIdentitySession(certificate, privateKey);
@@ -295,7 +295,7 @@ export class ObApi extends HTMLElement {
       const error = await res.json().catch(() => ({ error: "authentication required" }));
       throw new Error(error.error || "authentication required");
     }
-    const auth = await res.json() as AuthContext;
+    const auth = this._browserSessionAuth(await res.json() as AuthContext, this.authContext);
     this.authContext = auth;
     this.dispatchEvent(new CustomEvent("ob-auth-changed", { bubbles: true, detail: auth }));
     return auth;
@@ -314,7 +314,7 @@ export class ObApi extends HTMLElement {
       try {
         const res = await this.request("/auth/context");
         if (!res.ok) throw new Error("stored session expired");
-        const auth = await res.json() as AuthContext;
+        const auth = this._browserSessionAuth(await res.json() as AuthContext, stored.auth);
         this.setAuthContext(auth, stored.bearerToken);
         return auth;
       } catch {
@@ -359,6 +359,13 @@ export class ObApi extends HTMLElement {
       headers.set("X-Signature", await ObApi.signWithIdentityKey(this._privateKey, `${method} ${signedPath} ${timestamp}`));
     }
     return fetch(this.url(path), { ...init, headers });
+  }
+
+  private _browserSessionAuth(serverAuth: AuthContext, fallback?: AuthContext): AuthContext {
+    if (serverAuth.userId === null && serverAuth.scopes.includes("*") && fallback?.userId !== null && fallback?.userId !== undefined) {
+      return { userId: fallback.userId, scopes: serverAuth.scopes };
+    }
+    return serverAuth;
   }
 
   static async createIdentityKeypair(): Promise<{ publicKey: string; privateKey: CryptoKey }> {

@@ -190,12 +190,61 @@ export function formatValue(field: string, value: unknown, prop?: FieldSchema | 
   return String(value);
 }
 
+export function formatTemporalRange(startValue: unknown, endValue: unknown): string {
+  const start = parseDateTimeParts(startValue);
+  const end = parseDateTimeParts(endValue);
+  if (!start || !end) return "";
+  const startText = start.hasTime ? formatDateTime(startValue) : formatDate(startValue);
+  const endText = end.hasTime ? formatDateTime(endValue) : formatDate(endValue);
+  if (sameDateParts(start, end) && start.hasTime && end.hasTime) {
+    return `${formatDateFromParts(start)}, ${formatClockFromParts(start)} - ${formatClockFromParts(end)}`;
+  }
+  if (sameDateParts(start, end)) return startText;
+  return [startText, endText].filter(Boolean).join(" - ");
+}
+
 function formatDate(value: unknown): string {
   const text = String(value || "").trim();
   const match = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (!match) return text;
   const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
   return new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "short", year: "numeric" }).format(date);
+}
+
+type DateTimeParts = {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  hasTime: boolean;
+};
+
+function parseDateTimeParts(value: unknown): DateTimeParts | null {
+  const text = String(value || "").trim();
+  const match = text.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{1,2}):(\d{2}))?/);
+  if (!match) return null;
+  return {
+    year: Number(match[1]),
+    month: Number(match[2]),
+    day: Number(match[3]),
+    hour: Number(match[4] || 0),
+    minute: Number(match[5] || 0),
+    hasTime: match[4] !== undefined,
+  };
+}
+
+function sameDateParts(a: DateTimeParts, b: DateTimeParts): boolean {
+  return a.year === b.year && a.month === b.month && a.day === b.day;
+}
+
+function formatDateFromParts(parts: DateTimeParts): string {
+  const date = new Date(parts.year, parts.month - 1, parts.day);
+  return new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "short", year: "numeric" }).format(date);
+}
+
+function formatClockFromParts(parts: DateTimeParts): string {
+  return `${String(parts.hour).padStart(2, "0")}:${String(parts.minute).padStart(2, "0")}`;
 }
 
 function formatTime(value: unknown): string {

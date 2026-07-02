@@ -121,6 +121,29 @@ const publicShell = `
     font-weight: 700;
     cursor: pointer;
   }
+  ob-app .cart-nav-button {
+    display: inline-grid;
+    place-items: center;
+    width: 38px;
+    height: 38px;
+    border: 1px solid #d9d2c7;
+    border-radius: 999px;
+    background: #ffffff;
+    color: #111111;
+    cursor: pointer;
+  }
+  ob-app .cart-nav-button svg {
+    width: 19px;
+    height: 19px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  ob-app .cart-nav-button:hover {
+    background: #f7f5ef;
+  }
   ob-app ob-route-outlet {
     display: block;
     min-width: 0;
@@ -147,6 +170,9 @@ const publicShell = `
     }
     ob-app .nav-button {
       flex: 1;
+    }
+    ob-app .cart-nav-button {
+      flex: 0 0 38px;
     }
     ob-app ob-route-outlet {
       padding: 20px;
@@ -229,10 +255,13 @@ const authMenu = `
     width: 100%;
   }
   :host(ob-auth-menu) .account-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
     min-height: 36px;
     padding: 8px 12px;
     border: 1px solid var(--ob-border-strong);
-    border-radius: var(--ob-radius);
+    border-radius: 999px;
     background: var(--ob-bg);
     color: var(--ob-text);
     font: inherit;
@@ -240,9 +269,35 @@ const authMenu = `
     font-weight: 800;
     cursor: pointer;
   }
+  :host(ob-auth-menu) .account-button.signed-in {
+    padding: 4px 10px 4px 4px;
+  }
   :host(ob-auth-menu[placement="sidebar"]) .account-button {
     width: 100%;
     text-align: left;
+  }
+  :host(ob-auth-menu) .account-avatar {
+    display: inline-grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: var(--ob-text);
+    color: var(--ob-bg);
+    font-size: 12px;
+    font-weight: 900;
+  }
+  :host(ob-auth-menu) .account-avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  :host(ob-auth-menu) .account-label {
+    max-width: 104px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   :host(ob-auth-menu) .account-button:hover {
     background: var(--ob-bg-alt);
@@ -380,10 +435,6 @@ const accountSummary = `
     color: var(--ob-text-muted);
     font-size: 13px;
   }
-  :host(ob-account-summary) .activity-group + .activity-group {
-    border-top: 1px solid var(--ob-border);
-    padding-top: 12px;
-  }
   :host(ob-account-summary) ul {
     display: grid;
     gap: 8px;
@@ -392,16 +443,31 @@ const accountSummary = `
     padding: 0;
   }
   :host(ob-account-summary) li {
+    min-height: 44px;
+  }
+  :host(ob-account-summary) .purchase-item {
+    display: grid;
+    gap: 10px;
+    padding: 12px;
+    border: 1px solid var(--ob-border);
+    border-radius: var(--ob-radius);
+    background: var(--ob-bg-alt);
+  }
+  :host(ob-account-summary) .purchase-summary,
+  :host(ob-account-summary) .purchase-line {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    min-height: 44px;
-    padding: 10px 0;
-    border-top: 1px solid var(--ob-border-subtle, #ece7df);
   }
-  :host(ob-account-summary) li:first-child {
-    border-top: 0;
+  :host(ob-account-summary) .purchase-lines {
+    display: grid;
+    gap: 8px;
+    padding-top: 10px;
+    border-top: 1px solid var(--ob-border);
+  }
+  :host(ob-account-summary) .purchase-line {
+    min-height: 34px;
   }
   :host(ob-account-summary) li strong,
   :host(ob-account-summary) li span {
@@ -431,7 +497,8 @@ const accountSummary = `
   }
   @media (max-width: 640px) {
     :host(ob-account-summary) .section-header,
-    :host(ob-account-summary) li {
+    :host(ob-account-summary) .purchase-summary,
+    :host(ob-account-summary) .purchase-line {
       align-items: flex-start;
       flex-direction: column;
     }
@@ -583,6 +650,7 @@ const commerce = `
     gap: 4px;
     color: var(--ob-text-muted);
     font-size: 13px;
+    font-weight: 400;
     line-height: 1.35;
   }
   :host(ob-commerce) .variant-card {

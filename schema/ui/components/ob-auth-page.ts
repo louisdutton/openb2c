@@ -39,7 +39,7 @@ export class ObAuthPage extends HTMLElement {
     const context = this._context(returnTo);
     const title = signedIn ? "Account" : "Sign in";
     const subtitle = signedIn
-      ? "Manage your profile, activity, and session."
+      ? "Manage your profile, purchases, and session."
       : context === "admin"
         ? "Sign in to manage admin data."
         : returnTo

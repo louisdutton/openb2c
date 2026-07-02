@@ -1,30 +1,53 @@
 /**
- * <ob-account-summary> - Signed-in profile and account activity.
+ * <ob-account-summary> - Signed-in profile and purchase history.
  */
 import { ObApi } from "./ob-api";
-import { displayName, escapeAttr, escapeHtml, fieldDisplayLabel, fieldFormat, fieldHelpText, fieldPlaceholder, formatValue, labelFor, orderedSchemaFields, pluralDisplayName, statusClass } from "../format";
+import { displayName, escapeAttr, escapeHtml, fieldDisplayLabel, fieldFormat, fieldHelpText, fieldLabel, fieldPlaceholder, formatValue, labelFor, orderedSchemaFields, statusClass } from "../format";
 import { stylesheetLink } from "../style-link";
 
-const INTERNAL_PREFIXES = ["identity_", "api_key"];
 const PROFILE_EXCLUDED_FIELDS = new Set(["id", "email", "user_id", "customer_type", "created_at", "updated_at"]);
 const PROFILE_FIELD_ORDER = ["name", "phone", "avatar_url"];
-const ACTIVITY_EXCLUDED_ENTITIES = new Set(["user"]);
 
-type ActivityGroup = {
-  entity: string;
-  rows: Record<string, unknown>[];
+type FieldRef = { field: string; references?: string | null };
+type CommerceOption = { label?: string | null; field?: FieldRef | null };
+type CommerceConfig = {
+  catalog?: { entity?: string; label?: FieldRef | null; price?: FieldRef | null };
+  order?: {
+    entity?: string;
+    user?: FieldRef | null;
+    status?: FieldRef | null;
+    amount?: FieldRef | null;
+    expiresAt?: FieldRef | null;
+    paymentReference?: FieldRef | null;
+  };
+  lineItem?: {
+    entity?: string;
+    catalogItem?: FieldRef | null;
+    user?: FieldRef | null;
+    price?: FieldRef | null;
+    status?: FieldRef | null;
+    quantity?: FieldRef | null;
+    options?: Record<string, CommerceOption>;
+  };
+  orderLine?: { entity?: string; order?: FieldRef | null; lineItem?: FieldRef | null };
+};
+
+type Purchase = {
+  order: Record<string, unknown>;
+  lines: Record<string, unknown>[];
+  catalog: Map<string, Record<string, unknown>>;
 };
 
 export class ObAccountSummary extends HTMLElement {
   private _userId: number | null = null;
   private _profile: Record<string, unknown> | null = null;
-  private _activity: ActivityGroup[] = [];
+  private _purchases: Purchase[] = [];
   private _error = "";
   private _message = "";
   private _saving = false;
   private _onAuthChanged = () => {
     this._profile = null;
-    this._activity = [];
+    this._purchases = [];
     void this._render();
   };
 
@@ -63,7 +86,7 @@ export class ObAccountSummary extends HTMLElement {
         ${this._error ? `<div class="error-msg" role="alert">${escapeHtml(this._error)}</div>` : ""}
         ${this._message ? `<div class="success-msg" role="status">${escapeHtml(this._message)}</div>` : ""}
         ${this._renderProfile(api)}
-        ${this._renderActivity()}
+        ${this._renderPurchases(api)}
       </div>
     `;
 
@@ -84,34 +107,113 @@ export class ObAccountSummary extends HTMLElement {
       } else {
         this._profile = await profileRes.json() as Record<string, unknown>;
       }
-      this._activity = await this._loadActivity(api, userId);
+      this._purchases = await this._loadPurchases(api, userId);
     } catch {
       this._profile = null;
-      this._activity = [];
+      this._purchases = [];
       this._error = "Could not load account.";
     }
   }
 
-  private async _loadActivity(api: ObApi, userId: number): Promise<ActivityGroup[]> {
-    const entities = api.getEntities().filter((entity) => {
-      if (ACTIVITY_EXCLUDED_ENTITIES.has(entity)) return false;
-      if (INTERNAL_PREFIXES.some((prefix) => entity.startsWith(prefix))) return false;
-      const schema = api.getSchema(entity);
-      return Boolean(schema?.properties?.user_id);
+  private async _loadPurchases(api: ObApi, userId: number): Promise<Purchase[]> {
+    const config = api.getEcommerceConfig() as CommerceConfig | null;
+    const orderEntity = config?.order?.entity;
+    const orderUserField = config?.order?.user?.field || "user_id";
+    if (!orderEntity) return [];
+
+    const orders = await this._fetchRows(api, orderEntity, {
+      [orderUserField]: String(userId),
+      limit: "10",
+      sort: "id",
+      order: "desc",
     });
+    if (orders.length === 0) return [];
 
-    const groups = await Promise.all(entities.map(async (entity) => {
-      try {
-        const res = await api.request(`/api/${entity}s?user_id=${encodeURIComponent(String(userId))}&limit=5&sort=id&order=desc`);
-        if (!res.ok) return { entity, rows: [] };
-        const data = await res.json() as { items?: Record<string, unknown>[] };
-        return { entity, rows: data.items || [] };
-      } catch {
-        return { entity, rows: [] };
-      }
+    const catalog = await this._catalogMap(api, config);
+    const lineRows = await this._lineItemsForOrders(api, config, orders, userId);
+    return orders.map((order) => ({
+      order,
+      lines: lineRows.get(String(order.id)) || [],
+      catalog,
     }));
+  }
 
-    return groups.filter((group) => group.rows.length > 0);
+  private async _lineItemsForOrders(
+    api: ObApi,
+    config: CommerceConfig | null,
+    orders: Record<string, unknown>[],
+    userId: number,
+  ): Promise<Map<string, Record<string, unknown>[]>> {
+    const result = new Map<string, Record<string, unknown>[]>();
+    const lineEntity = config?.lineItem?.entity;
+    const orderLineEntity = config?.orderLine?.entity;
+    const orderField = config?.orderLine?.order?.field;
+    const lineField = config?.orderLine?.lineItem?.field;
+    if (!lineEntity) return result;
+
+    if (orderLineEntity && orderField && lineField) {
+      const lineCache = new Map<string, Record<string, unknown>>();
+      for (const order of orders) {
+        const orderId = String(order.id);
+        const links = await this._fetchRows(api, orderLineEntity, { [orderField]: orderId, limit: "50" });
+        const lines = await Promise.all(links.map(async (link) => {
+          const lineId = String(link[lineField] ?? "");
+          if (!lineId) return null;
+          if (!lineCache.has(lineId)) {
+            const row = await this._fetchRow(api, lineEntity, lineId);
+            if (row) lineCache.set(lineId, row);
+          }
+          return lineCache.get(lineId) || null;
+        }));
+        result.set(orderId, lines.filter((line): line is Record<string, unknown> => line !== null));
+      }
+      if ([...result.values()].some((lines) => lines.length > 0)) return result;
+    }
+
+    const lineUserField = config?.lineItem?.user?.field || "user_id";
+    const lines = await this._fetchRows(api, lineEntity, { [lineUserField]: String(userId), limit: "50", sort: "id", order: "desc" });
+    if (orders[0]?.id !== undefined) result.set(String(orders[0].id), lines);
+    return result;
+  }
+
+  private async _catalogMap(api: ObApi, config: CommerceConfig | null): Promise<Map<string, Record<string, unknown>>> {
+    try {
+      const res = await api.request("/commerce/catalog");
+      if (!res.ok) return new Map();
+      const data = await res.json() as {
+        items?: Record<string, unknown>[];
+        lookups?: Record<string, Record<string, string>>;
+      };
+      const labelField = config?.catalog?.label?.field || "";
+      return new Map((data.items || []).map((item) => {
+        const lookupLabel = labelField ? data.lookups?.[labelField]?.[String(item[labelField])] : "";
+        return [String(item.id), { ...item, __label: lookupLabel || labelFor(item) }];
+      }));
+    } catch {
+      return new Map();
+    }
+  }
+
+  private async _fetchRows(api: ObApi, entity: string, params: Record<string, string>): Promise<Record<string, unknown>[]> {
+    const query = new URLSearchParams(params);
+    try {
+      const res = await api.request(`/api/${entity}s?${query.toString()}`);
+      if (!res.ok) return [];
+      const data = await res.json() as { items?: Record<string, unknown>[] };
+      return data.items || [];
+    } catch {
+      return [];
+    }
+  }
+
+  private async _fetchRow(api: ObApi, entity: string, id: string): Promise<Record<string, unknown> | null> {
+    try {
+      const res = await api.request(`/api/${entity}s/${encodeURIComponent(id)}`);
+      if (!res.ok) return null;
+      return await res.json() as Record<string, unknown>;
+    } catch {
+      return null;
+    }
   }
 
   private _renderProfile(api: ObApi): string {
@@ -164,46 +266,94 @@ export class ObAccountSummary extends HTMLElement {
       .sort((a, b) => this._profileFieldRank(a) - this._profileFieldRank(b));
   }
 
-  private _renderActivity(): string {
+  private _renderPurchases(api: ObApi): string {
+    const config = api.getEcommerceConfig() as CommerceConfig | null;
+    const orderEntity = config?.order?.entity || "order";
     return `
-      <section class="account-section" aria-labelledby="activity-title">
+      <section class="account-section" aria-labelledby="purchases-title">
         <div class="section-header">
-          <h2 id="activity-title">Activity</h2>
+          <h2 id="purchases-title">Purchases</h2>
+          ${this._purchases.length > 0 ? `<span>${escapeHtml(`${this._purchases.length} ${displayName(orderEntity).toLowerCase()}${this._purchases.length === 1 ? "" : "s"}`)}</span>` : ""}
         </div>
-        ${this._activity.length === 0 ? `<p class="empty">No account activity yet.</p>` : this._activity.map((group) => `
-          <div class="activity-group">
-            <h3>${escapeHtml(pluralDisplayName(group.entity))}</h3>
-            <ul>
-              ${group.rows.map((row) => this._renderActivityRow(group.entity, row)).join("")}
-            </ul>
-          </div>
-        `).join("")}
+        ${this._purchases.length === 0 ? `<p class="empty">No purchases yet.</p>` : `
+          <ul class="purchase-list">
+            ${this._purchases.map((purchase) => this._renderPurchase(purchase, config)).join("")}
+          </ul>
+        `}
       </section>
     `;
   }
 
-  private _renderActivityRow(entity: string, row: Record<string, unknown>): string {
-    const status = row.status ?? row.active;
+  private _renderPurchase(purchase: Purchase, config: CommerceConfig | null): string {
+    const order = purchase.order;
+    const orderEntity = config?.order?.entity || "order";
+    const statusField = config?.order?.status?.field || "status";
+    const status = order[statusField];
     const statusToken = status === undefined ? "" : String(status);
     const statusClassName = statusClass("status", status);
-    const meta = this._activityMeta(row);
+    const meta = this._purchaseMeta(order, config);
     return `
-      <li>
-        <div>
-          <strong>${escapeHtml(labelFor(row))}</strong>
-          ${meta ? `<span>${escapeHtml(meta)}</span>` : `<span>${escapeHtml(displayName(entity))} #${escapeHtml(row.id)}</span>`}
+      <li class="purchase-item">
+        <div class="purchase-summary">
+          <div>
+            <strong>${escapeHtml(displayName(orderEntity))} #${escapeHtml(order.id)}</strong>
+            ${meta ? `<span>${escapeHtml(meta)}</span>` : ""}
+          </div>
+          ${statusToken ? `<span class="badge ${escapeAttr(statusClassName)}">${escapeHtml(statusToken)}</span>` : ""}
         </div>
-        ${statusToken ? `<span class="badge ${escapeAttr(statusClassName)}">${escapeHtml(statusToken)}</span>` : ""}
+        ${purchase.lines.length > 0 ? `
+          <div class="purchase-lines">
+            ${purchase.lines.map((line) => this._renderPurchaseLine(line, purchase.catalog, config)).join("")}
+          </div>
+        ` : ""}
       </li>
     `;
   }
 
-  private _activityMeta(row: Record<string, unknown>): string {
+  private _purchaseMeta(row: Record<string, unknown>, config: CommerceConfig | null): string {
     const parts: string[] = [];
-    if (typeof row.amount_pence === "number") parts.push(formatValue("amount_pence", row.amount_pence));
-    if (row.price_pence !== undefined) parts.push(formatValue("price_pence", row.price_pence));
+    const amountField = config?.order?.amount?.field || "amount_pence";
+    const expiresField = config?.order?.expiresAt?.field || "expires_at";
+    const referenceField = config?.order?.paymentReference?.field || "payment_reference";
+    if (row[amountField] !== undefined) parts.push(formatValue(amountField, row[amountField]));
+    if (row[referenceField]) parts.push(String(row[referenceField]));
     if (row.created_at) parts.push(String(row.created_at));
+    if (row[expiresField]) parts.push(`expires ${formatValue(expiresField, row[expiresField])}`);
     return parts.filter(Boolean).join(" · ");
+  }
+
+  private _renderPurchaseLine(line: Record<string, unknown>, catalog: Map<string, Record<string, unknown>>, config: CommerceConfig | null): string {
+    const catalogField = config?.lineItem?.catalogItem?.field;
+    const catalogItem = catalogField ? catalog.get(String(line[catalogField])) : null;
+    const priceField = config?.lineItem?.price?.field || "price_pence";
+    const statusField = config?.lineItem?.status?.field || "status";
+    const quantityField = config?.lineItem?.quantity?.field || "quantity";
+    const quantity = Number(line[quantityField] || 1);
+    const title = catalogItem ? String(catalogItem.__label || labelFor(catalogItem)) : labelFor(line);
+    const meta = [
+      `${Number.isFinite(quantity) && quantity > 1 ? `${quantity} x ` : ""}${line[priceField] !== undefined ? formatValue(priceField, line[priceField]) : ""}`.trim(),
+      ...this._lineOptions(line, config),
+    ].filter(Boolean).join(" · ");
+    const status = line[statusField] === undefined ? "" : String(line[statusField]);
+    return `
+      <div class="purchase-line">
+        <div>
+          <strong>${escapeHtml(title)}</strong>
+          ${meta ? `<span>${escapeHtml(meta)}</span>` : ""}
+        </div>
+        ${status ? `<span>${escapeHtml(status)}</span>` : ""}
+      </div>
+    `;
+  }
+
+  private _lineOptions(line: Record<string, unknown>, config: CommerceConfig | null): string[] {
+    return Object.entries(config?.lineItem?.options || {}).flatMap(([key, option]) => {
+      const field = option.field?.field || key;
+      const value = line[field];
+      if (value === undefined || value === null || value === "") return [];
+      const label = option.label || fieldLabel(field);
+      return [`${label}: ${value}`];
+    });
   }
 
   private async _saveProfile() {

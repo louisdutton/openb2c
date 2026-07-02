@@ -109,6 +109,79 @@ function hasUserSchema(db: Database): boolean {
   return !!row;
 }
 
+function quoteIdentifier(name: string): string {
+  return '"' + name.replace(/"/g, '""') + '"';
+}
+
+function tableExists(db: Database, table: string): boolean {
+  const row = db.query<{ name: string }, [string]>("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(table);
+  return !!row;
+}
+
+function existingColumns(db: Database, table: string): Set<string> {
+  const rows = db.query("PRAGMA table_info(" + quoteIdentifier(table) + ")").all() as { name: string }[];
+  return new Set(rows.map(row => row.name));
+}
+
+function columnNameFromDefinition(definition: string): string | null {
+  const match = definition.match(/^"([^"]+)"|^\\[([^\\]]+)\\]|^([A-Za-z_][A-Za-z0-9_]*)/);
+  return match ? (match[1] || match[2] || match[3]) : null;
+}
+
+function canAddColumnDefinition(definition: string): boolean {
+  if (/\\b(PRIMARY\\s+KEY|UNIQUE)\\b/i.test(definition)) return false;
+  if (/\\bNOT\\s+NULL\\b/i.test(definition) && !/\\bDEFAULT\\b/i.test(definition)) return false;
+  return true;
+}
+
+function parseCreateTableColumns(schemaSql: string): Map<string, string[]> {
+  const tables = new Map<string, string[]>();
+  const re = /CREATE TABLE IF NOT EXISTS\\s+("([^"]+)"|[A-Za-z_][A-Za-z0-9_]*)\\s*\\(([\\s\\S]*?)\\);/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(schemaSql))) {
+    const table = match[2] || match[1];
+    const definitions: string[] = [];
+    for (const line of match[3].split("\\n")) {
+      const definition = line.trim().replace(/,$/, "");
+      if (!definition) continue;
+      if (/^(CONSTRAINT|PRIMARY|FOREIGN|UNIQUE|CHECK)\\b/i.test(definition)) continue;
+      definitions.push(definition);
+    }
+    tables.set(table, definitions);
+  }
+  return tables;
+}
+
+function applyGeneratedAdditiveSchemaSync(db: Database, schemaSql: string): number {
+  let applied = 0;
+  const tables = parseCreateTableColumns(schemaSql);
+  const sync = db.transaction(() => {
+    for (const [table, definitions] of tables) {
+      if (!tableExists(db, table)) continue;
+      const existing = existingColumns(db, table);
+      for (const definition of definitions) {
+        const column = columnNameFromDefinition(definition);
+        if (!column || existing.has(column)) continue;
+        if (!canAddColumnDefinition(definition)) {
+          throw new Error("Column " + table + "." + column + " needs a manual migration before this generated schema can run");
+        }
+        db.run("ALTER TABLE " + quoteIdentifier(table) + " ADD COLUMN " + definition);
+        existing.add(column);
+        applied += 1;
+      }
+    }
+  });
+  sync();
+  if (applied > 0) {
+    const checksum = hashString(schemaSql);
+    const id = "schema:additive-sync:" + checksum;
+    const description = "generated additive schema sync";
+    MIGRATION_DIAGNOSTICS.push({ id, description, status: "applied", checksum });
+    log("info", "migration applied", { id, description, columns: applied });
+  }
+  return applied;
+}
+
 function migrationRow(db: Database, id: string): { checksum: string } | null {
   return db.query<{ checksum: string }, [string]>("SELECT checksum FROM openb2c_migration WHERE id = ?").get(id) || null;
 }
@@ -190,6 +263,7 @@ export function runSchemaMigrations(db: Database, schemaSql: string) {
   for (const file of files) {
     applyMigration(db, file.id, file.source, \`migration file: \${file.path}\`);
   }
+  applyGeneratedAdditiveSchemaSync(db, schemaSql);
   applyMigration(db, \`schema:\${hashString(schemaSql)}\`, schemaSql, "generated schema sync");
 }
 
