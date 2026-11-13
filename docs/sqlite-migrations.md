@@ -15,7 +15,7 @@ Fresh databases apply the current generated schema directly. Existing databases 
 
 ## Generating Stubs
 
-Use the codegen migration planner with old and new schema JSON to produce additive migration stubs. Safe automatic steps include:
+Use `cargo run -p openb2c -- migration old-schema.json new-schema.json > generated/migrations/001_change.sql` to produce a migration stub from saved evaluated schemas. Review and complete manual steps before deployment. Safe automatic steps include:
 
 - Creating new tables.
 - Adding nullable columns or columns with defaults.
@@ -37,7 +37,7 @@ Keep the backup outside the deployment directory and retain the generated code v
 
 ## Maintenance
 
-For a single-server Bun + SQLite deployment, schedule maintenance from the host that owns the writable database file.
+For a single-server Rust + SQLite deployment, schedule maintenance from the host that owns the writable database file.
 
 Run lightweight planner/statistics maintenance regularly while the service is healthy:
 
@@ -68,7 +68,7 @@ For shared environments, prefer forward-fix migrations after a migration has bee
 
 ## Restore Drill
 
-Practice this before production and after any schema or operationally significant release. A restore drill must never overwrite the production database; restore into an isolated path and prove the generated app can run against that copy. Run the drill from the generated release directory that contains `server.ts`.
+Practice this before production and after any schema or operationally significant release. A restore drill must never overwrite the production database; restore into an isolated path and prove the generated app can run against that copy. Run the drill from the generated release directory that contains the compiled `openb2c-app` binary.
 
 ```bash
 restore_dir="$(mktemp -d)"
@@ -76,7 +76,7 @@ backup="/var/backups/openb2c/app-YYYYmmdd-HHMMSS.db"
 cp "$backup" "$restore_dir/app.db"
 sqlite3 "$restore_dir/app.db" "PRAGMA integrity_check;"
 sqlite3 "$restore_dir/app.db" "SELECT id, checksum, applied_at FROM openb2c_migration ORDER BY applied_at;"
-DB_PATH="$restore_dir/app.db" PORT=3099 AUTH_ENABLED=false bun generated/server.ts &
+DB_PATH="$restore_dir/app.db" PORT=3099 AUTH_ENABLED=false ./openb2c-app &
 server_pid=$!
 trap 'kill "$server_pid" 2>/dev/null || true' EXIT
 curl --retry 10 --retry-connrefused -fsS http://127.0.0.1:3099/health

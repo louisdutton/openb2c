@@ -465,7 +465,7 @@ let
       type = lib.mkOption {
         type = lib.types.str;
         default = "text";
-        description = "Generated TypeScript/OpenAPI type for the derived value.";
+        description = "Generated Rust/OpenAPI type for the derived value.";
       };
       metadata = lib.mkOption {
         type = fieldMetadataType;

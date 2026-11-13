@@ -9,8 +9,8 @@ The environment contract is derived from top-level Nix integration metadata. `in
 Use the example `.env.example` as a starting point:
 
 ```bash
-cp examples/duchyopera/.env.example .env
-NODE_ENV=development AUTH_ENABLED=false DB_PATH=./dev.db bun examples/duchyopera/generated/server.ts
+devenv shell
+NODE_ENV=development AUTH_ENABLED=false DB_PATH=./dev.db devenv up duchyopera
 ```
 
 Local development may use ephemeral registry keys and local fake providers. Missing `EMAIL_WEBHOOK_URL` or `WEBHOOK_URL` records fake email/webhook effect results instead of calling external services, and `PAYMENT_PROVIDER=local` or `PAYMENT_PROVIDER=fake` returns deterministic fake payment-session shapes. Set `EMAIL_PROVIDER=fake` to capture identity OTP messages in the local fake outbox at `/ops/fake-emails`; non-production challenge responses still include the code for browser tests.
@@ -37,7 +37,7 @@ Production startup fails when required env vars are missing. The generated serve
 
 - Required app env vars derived from the ontology and declared effects.
 - Auth is not disabled unless `ALLOW_INSECURE_AUTH_DISABLED=true`.
-- CORS origins are explicit unless `ALLOW_WILDCARD_CORS=true`.
+- CORS origins are explicit; wildcard origins are rejected in production.
 - Registry keys are configured unless `ALLOW_EPHEMERAL_REGISTRY_KEYS=true`.
 - Identity OTP delivery is configured with the Resend provider when identity challenge tables are present.
 
@@ -52,7 +52,7 @@ Declared outbound webhook effects require `WEBHOOK_URL` and `WEBHOOK_SIGNING_SEC
 
 ## Generated Templates
 
-Codegen writes `.env.example` beside generated artifacts. These templates list required and optional variables, but secret values are intentionally blank.
+Codegen writes `.env.example` beside generated artifacts. Rust reads the process environment directly; source a trusted environment file explicitly when running locally. These templates list required and optional variables, but secret values are intentionally blank.
 OpenAPI also includes `x-openb2c-integrations` so generated clients and operators can inspect provider and environment metadata without exposing secret values.
 
 Example projects also include:

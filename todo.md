@@ -5,7 +5,7 @@ OpenB2C is past the initial schema-language prototype. The next priority is prov
 ## Implemented Foundation
 
 - Nix composition for reusable modules and bundles.
-- SQLite, TypeScript services, REST, MCP, OpenAPI, public UI, and admin UI generation.
+- SQLite, Rust services, REST, MCP, OpenAPI, public UI, and admin UI generation.
 - FK-first relationship inference and graph-derived workspaces.
 - Field metadata, typed constraints, profile-extension inference, and commerce-role inference.
 - Typed operation assignments, transitions, presentation metadata, policy metadata, audit metadata, cascades, and typed effects.
@@ -36,5 +36,5 @@ OpenB2C is past the initial schema-language prototype. The next priority is prov
 - Rich role/permission management UI.
 - Calendar/provider sync.
 - Real document storage and upload/download.
-- SSR or separately deployed frontend architecture.
+- Separately deployed frontend architecture.
 - Broader payment/refund/reconciliation support beyond the first checkout flow.

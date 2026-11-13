@@ -1,101 +1,64 @@
 # OpenB2C
 
-OpenB2C is a declarative generator for composable B2C and operational systems.
+OpenB2C composes reusable business capabilities in Nix and generates standalone Rust applications: SQLite storage, typed models, REST, MCP, OpenAPI, and public and admin web pages.
 
-Most organisations need the same underlying machinery: users, profiles, events, resources, documents, bookings, payments, permissions, notifications, audit, and admin workflows. OpenB2C provides those pieces as reusable Nix modules and bundles, then generates a working SQLite/Bun application from the evaluated composition.
+The evaluated Nix schema is authoritative. Foreign keys define the data graph; operations, constraints, field metadata, and temporal fields determine workflows and presentation. There is no parallel UI schema.
 
-## Problem
+## Run
 
-Bespoke business systems usually repeat the same schema, API, auth, admin, and checkout work. That creates fragile one-off apps and makes every new client feel like a greenfield build.
+Install [Devenv](https://devenv.sh/getting-started/) on Linux, then:
 
-OpenB2C aims to make those common capabilities prebuilt and composable, while still allowing a specific organisation to assemble the combination it needs.
+```sh
+devenv shell
+devenv build outputs.duchyopera-generated
+cat "$(devenv build outputs.duchyopera-generated | jq -r '."outputs.duchyopera-generated"')/inference.md"
+devenv up duchyopera
+```
 
-## Solution
+`devenv up duchyopera` consumes the application output directly. Nix builds the generator, generated sources and application in dependency order and caches each result. There is no generation task that writes into the checkout. Generated sources and inference reports are available through `outputs.duchyopera-generated`; `outputs.duchyopera` contains the runnable binary, and `outputs.generator` contains the CLI.
 
-A project composes modules in Nix. Codegen emits:
+Duchy Opera owns its environment in `examples/duchyopera/devenv.nix`. These commands also work after `cd examples/duchyopera`. The root environment imports the example, so it can run the same process and build the same outputs.
 
-- SQLite schema and seed SQL
-- TypeScript row/input types
-- service-layer business logic
-- REST API
-- MCP server
-- OpenAPI metadata
-- generated public and admin web UI
+Open `http://127.0.0.1:3085/` for the public site, `/account` for customer records, and `/admin` for staff. Email verification uses captured development messages. Staff can sign in with an API key; see [authentication](docs/auth-and-authorization.md). To explore locally with system access, run `AUTH_ENABLED=false devenv up duchyopera`.
 
-The evaluated Nix schema is the source of truth. The generated UI is inferred from the data graph, operations, constraints, field metadata, temporal fields, and commerce/profile conventions. There is no separate hand-written UI schema.
+The generated application serves HTML, CSS, assets, and APIs from one Rust process. Forms use ordinary HTTP and CSRF protection. No JavaScript build or runtime is required.
 
-## Model
+```sh
+devenv build outputs.duchyopera
+devenv test
+```
+
+Normal HTTP listens on port 3085; MCP HTTP uses 3090 and requires initialization and authenticated subsequent requests. Stdio MCP is trusted local access. Both transports use the same services and database settings.
+
+## Structure
 
 ```text
-primitives
-  Shared concepts such as users, profiles, temporal records, documents,
-  bookings, tickets, payments, notifications, and audit.
-
-capabilities
-  Fixed implementation machinery such as auth, checkout, effects,
-  migrations, generated REST/MCP/OpenAPI, and generated UI.
-
-bundles
-  Opinionated combinations of primitives and capabilities, such as
-  production scheduling or materials library.
-
-apps
-  Concrete compositions for an organisation or individual.
+schema/                        Nix option model, helpers, modules and bundles
+crates/openb2c-schema/          Schema, validation, graph inference, SQL and OpenAPI
+crates/openb2c/                 Native generator CLI and Rust model generation
+crates/openb2c-runtime/         SQLite services, auth, commerce, effects, HTTP/MCP and UI
+devenv/shared/                 Shared Rust tooling, hooks, inputs and workspace tests
+nix/                           Generator packaging and reusable source generation
+examples/duchyopera/            Pilot composition, assets and its own Devenv environment
+docs/                          Schema contracts and operating guides
 ```
 
-Foreign keys are the primary structural signal. OpenB2C treats the schema as a graph, not a tree, so a record can appear in every relevant workspace. Profile extensions are inferred from one-to-one required unique FKs, and commerce roles are inferred from FKs, constraints, money fields, status fields, and checkout settings.
+Devenv generation outputs are immutable directories in the Nix store. They contain a Cargo manifest, locked dependencies, support crates, SQL, assets and inference reports. Change the Nix model or source crates and rebuild; do not hand-edit generated files. The CLI still supports writing a standalone project to a composition's `generated/` directory for export or development. Operator migrations and databases belong outside immutable outputs.
 
-## Current Pilot
+## Acceptance case
 
-Duchy Opera is the first acceptance case:
+Duchy Opera exercises public performance booking, ticket checkout, payments, customer accounts, private production scheduling, rehearsals, calls, requirement coverage, materials, and artist profiles. Commerce roles and workspaces come from the graph so the same machinery applies to other compositions.
 
-- public performances and ticket checkout
-- payment session and payment webhook flow
-- customer-owned bookings and tickets
-- private production scheduling
-- rehearsals, calls, requirement coverage, and materials
-- generated public and private/admin surfaces
+Payment adapters currently support local/fake settlement, including signed webhook, expiry and refund flows. Production payment providers require their own adapter; setting a provider name does not implement it.
 
-The goal is not to build a Duchy-only app. Duchy Opera is the proving lens for reusable platform modules.
+## Development and deployment
 
-## Repository
+Devenv's [built-in Rust support](https://devenv.sh/languages/rust/) supplies Cargo, rustc, rustfmt, Clippy and rust-analyzer from the nixpkgs input pinned in `devenv.lock`. `devenv update` updates environment inputs deliberately; Cargo dependencies are pinned in `Cargo.lock`. `.envrc` uses `use devenv`. Nix compositions resolve `<nixpkgs/lib>` from the same pinned input.
 
-```text
-schema/
-├── base.nix              # Nix option model
-├── lib/                  # expression and composition helpers
-├── modules/              # reusable modules
-├── bundles/              # cross-entity bundles
-├── codegen/              # generators and tests
-└── ui/                   # generated UI runtimes
+Both binary outputs use `languages.rust.import`, Devenv's built-in crate2nix packaging function. `nix/generator.nix` packages the tool and `nix/generate.nix` generates sources for an evaluated schema. Duchy Opera declares its own model, outputs and process in its Devenv module. `nix/generated-app.lock` pins the common generated application manifest; refresh it with Cargo when the generated dependency contract changes. Lifecycle dependencies are declared on consumers: the server references its application output, and `devenv:enterTest.after` selects the Rust test task.
 
-examples/
-└── duchyopera/           # current pilot
-```
+The environment follows Devenv's [monorepo pattern](https://devenv.sh/guides/monorepo/): YAML imports beginning with `/` resolve from the Git repository root. The root imports `/devenv/shared` and `/examples/duchyopera`; the example imports `/devenv/shared`. Shared inputs are declared once in `devenv/shared/devenv.yaml`. The active environment uses its own lockfile: the root lock for the combined environment, and `examples/duchyopera/devenv.lock` when working directly in the example. Both start from the same pinned inputs. Repository paths use `config.git.root`, so working directories stay consistent from either entry point.
 
-## Commands
+The pinned `git-hooks` input enables the built-in Rustfmt and Clippy hooks, with warnings denied across all workspace targets. Devenv installs these on shell entry and runs them during `devenv test`. The `openb2c:test` task also runs service and contract tests, database upgrades, delivery retries, generated model compilation, and Chromium customer/admin journeys. Tests launch their own isolated servers; the development server is excluded from the test environment. See [migration details](docs/rust-migration.md), [configuration](docs/configuration.md), [deployment](docs/deployment.md), and [SQLite migrations](docs/sqlite-migrations.md).
 
-```bash
-nix develop
-compose examples/duchyopera/composition.nix
-compose --explain examples/duchyopera/composition.nix
-bun test
-```
-
-Run the Duchy Opera generated public/admin UI against the generated API:
-
-```bash
-cd examples/duchyopera
-bun run app
-```
-
-## Stack
-
-- Nix for composition
-- Bun and TypeScript for generated runtime code
-- SQLite for storage
-- REST, MCP, OpenAPI, and generated web UI outputs
-
-## License
-
-See [LICENSE.md](LICENSE.md).
+Licensed under [GPL-3.0](LICENSE.md).

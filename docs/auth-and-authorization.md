@@ -23,28 +23,28 @@ These concepts are platform behavior and should not be redefined by each composi
 
 Generated services receive the smallest context needed for authorization:
 
-```ts
-export interface AuthContext {
-  userId: number | null;
-  scopes: string[];
+```rust
+pub struct AuthContext {
+    pub user_id: Option<i64>,
+    pub scopes: Vec<String>,
 }
 ```
 
-`userId` identifies the authenticated user record. API keys are always bound to a user, so API-key calls still act on behalf of a user.
+`user_id` identifies the authenticated user record. API keys are always bound to a user, so API-key calls still act on behalf of a user.
 
 `scopes` are the normalized permission grants available to the caller. The service layer does not branch on principals, roles, claims, providers, credential kinds, or subjects. Roles can exist as product data or as an issuance-time concept, but generated enforcement consumes their resulting scopes.
 
-`SYSTEM_AUTH_CONTEXT` uses `scopes: ["*"]` and is reserved for trusted local/system execution such as auth-disabled development and local MCP execution.
+`AuthContext::system()` uses `scopes: ["*"]` and is reserved for trusted local/system execution such as auth-disabled development and local MCP execution.
 
 ## MCP Transport Auth
 
-Generated MCP tools use the same service-layer authorization checks as REST and direct TypeScript callers.
+Generated MCP tools use the same service-layer authorization checks as REST and direct Rust callers.
 
-Local stdio MCP execution is treated as trusted local system execution. It receives `SYSTEM_AUTH_CONTEXT` and is intended for same-machine tools launched by the operator or the runtime.
+Local stdio MCP execution is treated as trusted local system execution. It receives `AuthContext::system()` and is intended for same-machine tools launched by the operator or the runtime.
 
-HTTP MCP execution is a remote transport and requires `Authorization: Bearer <token>` by default after session initialization. The bearer token can be an identity session token or an API key; the generated HTTP transport verifies it and passes the resulting `{ userId, scopes }` context into `handleRequest`. Set `MCP_HTTP_AUTH_ENABLED=false` only for local development.
+HTTP MCP execution is a remote transport and requires `Authorization: Bearer <token>` by default after session initialization. The bearer token can be an identity session token or an API key; the generated HTTP transport verifies it and passes the resulting `{ userId, scopes }` context into `handleRequest`. Set `AUTH_ENABLED=false` only for explicit local system access.
 
-Generated MCP `tools/list` responses are permission-aware. Tools are only advertised when the current auth context has the relevant operation scope and, for relationship-scoped operations, an authenticated `userId` that can be checked against records at call time. Tool calls repeat the same collection-level preflight before invoking generated services, while the service layer remains the final record-level authorization authority.
+Generated MCP `tools/list` responses are permission-aware. Tools are only advertised when the current auth context has the relevant operation scope and, for relationship-scoped operations, an authenticated `user_id` that can be checked against records at call time. Tool calls repeat the same collection-level preflight before invoking generated services, while the service layer remains the final record-level authorization authority.
 
 ## Certificate Registry State
 
@@ -64,7 +64,7 @@ This keeps local deployments stateful enough for revocation and rotation while s
 Identity challenge creation is rate limited by email, public key, and client IP over a 10-minute window. Generated REST handlers derive the client IP from forwarding headers when present and return `429` with code `rate_limited` when a limit is exceeded.
 Challenge verification attempts are also rate limited over a 10-minute window by challenge ID and email address, and failed attempts are recorded before code or signature validation.
 OTP challenge codes are stored with bcrypt in `identity_challenge.code_hash`; the raw OTP is only returned in development. In production, generated REST handlers send it through the configured Resend email delivery channel and only return a delivery message.
-Generated services clean up expired and used identity challenges before creating new challenges and after successful verification.
+Used challenges remain recorded for rate-limit accounting; expiry and single-use checks reject them.
 Successful challenge verification upserts `identity_registry`: the same key is reissued, while a different key rotates the identity and invalidates previous local-mode certificates for that email.
 Generated services reject repeated request signatures inside the certificate timestamp window to prevent exact request replay.
 
@@ -132,7 +132,7 @@ relationships.issue.reviewer.field = config.refs.issue.reviewed_by_user_id;
 operations.issue.review.relationships = [ "reviewer" ];
 ```
 
-For create operations, generated services may fill relationship fields from `auth.userId` when the caller omits them. For update operations, generated services prevent changing relationship fields guarded by the operation.
+For create operations, generated services may fill relationship fields from `auth.user_id` when the caller omits them. For update operations, generated services prevent changing relationship fields guarded by the operation.
 
 Current modules use relationships such as:
 
@@ -165,3 +165,16 @@ Keeping those separate lets the same operation model serve REST, MCP, local serv
 This is suitable for public catalog reads such as venues, artists, and performances.
 
 Public does not mean "skip business logic"; custom operation guards still run after authorization.
+
+## Browser and staff access
+
+Customer sign-in uses an email code and an HttpOnly session cookie. Forms include CSRF tokens. Email sessions receive the inferred self-service scopes; they do not acquire global staff permissions.
+
+An operator can issue a staff key locally against the intended database:
+
+```sh
+app_output=$(devenv build outputs.duchyopera | jq -er '."outputs.duchyopera"')
+DB_PATH=/path/to/app.db "$app_output/bin/openb2c-app" --create-api-key staff@example.org '*'
+```
+
+The JSON response contains the raw `key` once. Keep it private. Give a comma-separated list of narrower scopes instead of `*` where appropriate. On `/login`, expand “Sign in with an API key”. The key's scopes govern every admin action. Logout clears the browser credential; revoke the key through its record to end access permanently. Local provisioning is trusted execution with filesystem access to the database.

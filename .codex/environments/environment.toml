@@ -7,4 +7,4 @@ script = ""
 [[actions]]
 name = "Run Duchy Opera"
 icon = "run"
-command = "nix develop --command bun scripts/run-duchyopera.ts"
+command = "devenv up duchyopera"

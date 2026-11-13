@@ -15,7 +15,7 @@ It proves that public commerce and private operations can be generated from reus
 
 ## Composition
 
-`composition.nix` imports reusable modules from `schema/modules/` and bundles from `schema/bundles/`.
+`model.nix` imports reusable modules from `schema/modules/` and bundles from `schema/bundles/`, accepting the caller's pinned Nix library. `composition.nix` is the CLI entry point for the same model.
 
 Commerce is enabled with:
 
@@ -37,22 +37,30 @@ Catalog, order, line item, transaction, and bridge roles are inferred from the F
 
 ## Commands
 
-From the repository root:
+Enter this example's own environment:
 
 ```bash
-compose examples/duchyopera/composition.nix
-compose --explain examples/duchyopera/composition.nix
-bun test
+cd examples/duchyopera
+devenv shell
+```
+
+Its `devenv.yaml` imports `/devenv/shared` using Devenv's repository-root monorepo imports. Shared Rust tooling, hooks, the generator and workspace acceptance tests are inherited. This example owns its generated output, application output and server process. `config.git.root` anchors repository paths regardless of the active environment directory.
+
+From here, or from the repository root which imports this environment:
+
+```bash
+devenv build outputs.duchyopera-generated
+cat "$(devenv build outputs.duchyopera-generated | jq -r '."outputs.duchyopera-generated"')/inference.md"
+devenv test
 ```
 
 Run the generated public/admin UI against the generated API:
 
 ```bash
-cd examples/duchyopera
-bun run app
+devenv up duchyopera
 ```
 
-Run only the generated API with `bun run server`. Fresh local app databases apply reference venue data and demo fixtures by default. Set `OPENB2C_APPLY_FIXTURES=false` to start with reference data only.
+Public pages, admin pages and the API share `http://127.0.0.1:3085`. The process consumes `outputs.duchyopera`, which depends on the immutable generated source output. Nix builds both Rust binaries with `languages.rust.import`. Use `AUTH_ENABLED=false devenv up duchyopera` for local system access, or sign in through email/API key. Fresh local app databases apply reference venue data and demo fixtures by default. Set `OPENB2C_APPLY_FIXTURES=false` to start with reference data only.
 
 ## Checkout Flow
 
