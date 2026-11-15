@@ -335,6 +335,40 @@ pub fn seed_sql(schema: &Schema, fixtures: bool) -> Result<String> {
             }
         }
     }
+    if fixtures && !schema.seed.catalog.is_empty() {
+        let catalog = schema
+            .capabilities
+            .get("catalog")
+            .ok_or_else(|| anyhow::anyhow!("Demo products require the catalog capability"))?;
+        let products = quote(
+            catalog
+                .entities
+                .get("product")
+                .ok_or_else(|| anyhow::anyhow!("Catalog has no product role"))?,
+        );
+        let prices = quote(
+            catalog
+                .entities
+                .get("price")
+                .ok_or_else(|| anyhow::anyhow!("Catalog has no price role"))?,
+        );
+        for (code, product) in &schema.seed.catalog {
+            let code = literal(&Value::String(code.clone()))?;
+            let name = literal(&Value::String(product.name.clone()))?;
+            let description = literal(&serde_json::to_value(&product.description)?)?;
+            let currency = literal(&Value::String(product.currency.clone()))?;
+            statements.push(format!(
+                "INSERT INTO {products} (code, name, description) SELECT {code}, {name}, {description} WHERE NOT EXISTS (SELECT 1 FROM {products} WHERE code={code});"
+            ));
+            for price in &product.prices {
+                let amount = price.amount;
+                let interval = literal(&Value::String(price.interval.clone()))?;
+                statements.push(format!(
+                    "INSERT INTO {prices} (product_id, amount_minor, currency, billing_interval) SELECT p.id, {amount}, {currency}, {interval} FROM {products} AS p WHERE p.code={code} AND NOT EXISTS (SELECT 1 FROM {prices} WHERE product_id=p.id AND amount_minor={amount} AND currency={currency} AND billing_interval={interval});"
+                ));
+            }
+        }
+    }
     Ok(if statements.is_empty() {
         String::new()
     } else {

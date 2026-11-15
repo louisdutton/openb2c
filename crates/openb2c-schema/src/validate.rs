@@ -299,8 +299,42 @@ pub fn validate(schema: &Schema) -> Vec<String> {
             }
         }
     }
-    if let Err(error) = crate::inference::commerce(schema) {
-        errors.push(error.to_string());
+    if !schema.seed.catalog.is_empty() && !schema.capabilities.contains_key("catalog") {
+        errors.push("demo.products requires the catalog capability".into());
+    }
+    let code_pattern = regex::Regex::new("^[a-z0-9][a-z0-9_-]*$").unwrap();
+    for (code, product) in &schema.seed.catalog {
+        let path = format!("demo.products.{code}");
+        if code.is_empty() || code.len() > 100 || !code_pattern.is_match(code) {
+            errors.push(format!("{path}: invalid product code"));
+        }
+        if product.name.is_empty() || product.name.chars().count() > 160 {
+            errors.push(format!("{path}.name: expected 1 to 160 characters"));
+        }
+        if product.currency.len() != 3 || !product.currency.bytes().all(|b| b.is_ascii_uppercase())
+        {
+            errors.push(format!(
+                "{path}.currency: expected a three-letter uppercase currency"
+            ));
+        }
+        let mut prices = std::collections::BTreeSet::new();
+        for price in &product.prices {
+            if price.amount < 1 || !["one_off", "month", "year"].contains(&price.interval.as_str())
+            {
+                errors.push(format!("{path}.prices: expected a positive minor-unit amount and one_off, month or year interval"));
+            }
+            if !prices.insert((price.amount, &price.interval)) {
+                errors.push(format!("{path}.prices: duplicate price"));
+            }
+        }
+    }
+    errors.extend(crate::capabilities::validate(schema));
+    if schema
+        .metadata
+        .get("commerce")
+        .is_some_and(|c| c["enabled"] == true)
+    {
+        errors.push("commerce.enabled is retired; select explicit capability modules".into());
     }
     errors
 }

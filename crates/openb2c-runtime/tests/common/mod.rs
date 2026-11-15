@@ -10,7 +10,7 @@ pub fn schema() -> Schema {
                     "eval",
                     "--json",
                     "-f",
-                    "examples/duchyopera/composition.nix",
+                    "crates/openb2c-runtime/tests/fixtures/composition.nix",
                 ])
                 .current_dir(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."))
                 .output()

@@ -96,7 +96,7 @@ impl Service {
         } else {
             &self.schema.organization.name
         };
-        let message = json!({"provider":env::var("EMAIL_PROVIDER").unwrap_or_else(|_|if production(){"resend"}else{"fake"}.into()),"to":email,"challengeId":challenge,"subject":format!("{name} sign-in code"),"text":format!("Your sign-in code for {name} is: {code}"),"html":format!("<p>Your sign-in code for {} is: <strong>{code}</strong></p>", crate::ui::escape(name))});
+        let message = json!({"provider":env::var("EMAIL_PROVIDER").unwrap_or_else(|_|if production(){"resend"}else{"fake"}.into()),"to":email,"challengeId":challenge,"subject":format!("{name} sign-in code"),"text":format!("Your sign-in code for {name} is: {code}"),"html":format!("<p>Your sign-in code for {} is: <strong>{code}</strong></p>", crate::text::escape(name))});
         if message["provider"] == "fake" {
             if !fake_allowed() {
                 return Err(ServiceError::new(
@@ -143,11 +143,6 @@ impl Service {
                 json!({"level":"info","message":"effect emitted","payload":payload,"idempotencyKey":key})
             );
             return Ok(json!({"emitted":true}));
-        }
-        if kind == "call" && payload["service"] == "payment" {
-            return Ok(
-                json!({"provider":env::var("PAYMENT_PROVIDER").unwrap_or_else(|_|"local".into()),"action":payload["action"]}),
-            );
         }
         let email = kind == "notify" || (kind == "call" && payload["service"] == "email");
         let url = env::var(if email {
@@ -340,16 +335,12 @@ impl Worker {
         let thread = std::thread::spawn(move || {
             while !signal.load(std::sync::atomic::Ordering::Relaxed) {
                 let _deadline = crate::service::Deadline::enter(Duration::from_secs(20));
-                if service
-                    .schema
-                    .metadata
-                    .get("commerce")
-                    .is_some_and(|c| c["enabled"] == true)
-                    && let Err(error) = service.expire_orders()
+                if service.schema.capabilities.contains_key("subscriptions")
+                    && let Err(error) = service.b2c_renew_due(&crate::AuthContext::system())
                 {
                     eprintln!(
                         "{}",
-                        json!({"level":"error","message":"Order expiry worker failed","code":error.code})
+                        json!({"level":"error","message":"Subscription billing worker failed","code":error.code})
                     );
                 }
                 if let Err(error) = service.dispatch_effects(false) {

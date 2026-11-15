@@ -33,14 +33,9 @@ fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
-fn evaluate_duchy() -> Vec<u8> {
+fn evaluate(path: &str) -> Vec<u8> {
     let result = Command::new("nix")
-        .args([
-            "eval",
-            "--json",
-            "-f",
-            "examples/duchyopera/composition.nix",
-        ])
+        .args(["eval", "--json", "-f", path])
         .current_dir(root())
         .output()
         .expect("Nix is required; run tests in devenv shell");
@@ -73,40 +68,175 @@ fn generate(input: &[u8], output: &Path, extra: &[&str]) -> std::process::Output
 }
 
 #[test]
-fn native_cli_generates_duchy_and_runtime_bootstraps_all_fixtures() {
-    let input = evaluate_duchy();
+fn native_cli_generates_modular_b2c_backend() {
     let temp = TempDir::new();
+    // A model is portable: no repository-relative imports or companion files.
+    let model = temp.0.join("publisher ${1 + 1}.nix");
+    fs::copy(root().join("examples/publisher.nix"), &model).unwrap();
     let output = temp.0.join("app");
-    let result = generate(&input, &output, &["--explain=json"]);
+    for directory in [
+        "support/runtime/src",
+        "support/runtime/assets",
+        "assets",
+        "migrations",
+    ] {
+        fs::create_dir_all(output.join(directory)).unwrap();
+    }
+    for file in [
+        "support/runtime/src/ui.rs",
+        "support/runtime/src/mcp.rs",
+        "support/runtime/assets/app.css",
+        "assets/logo.svg",
+    ] {
+        fs::write(output.join(file), "obsolete generated artifact").unwrap();
+    }
+    fs::write(output.join("migrations/001_operator.sql"), "SELECT 1;").unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_openb2c"))
+        .arg(&model)
+        .args(["--out", output.to_str().unwrap(), "--explain=json"])
+        .current_dir(&temp.0)
+        .output()
+        .unwrap();
     assert!(
         result.status.success(),
         "{}",
         String::from_utf8_lossy(&result.stderr)
     );
     let report: Value = serde_json::from_slice(&result.stdout).unwrap();
-    assert!(report["relationships"].as_array().unwrap().len() > 20);
+    assert_eq!(report["capabilities"].as_object().unwrap().len(), 10);
+    assert!(report.get("surfaces").is_none());
     let schema: Schema =
         serde_json::from_slice(&fs::read(output.join("schema.json")).unwrap()).unwrap();
     let service = Service::open(schema, ":memory:", true).unwrap();
-    let performances = service
-        .list(
-            "performance",
-            &ListOptions::default(),
-            &AuthContext::system(),
-        )
-        .unwrap();
-    assert_eq!(performances["total"], 2);
-    let production = service
-        .find("production", &json!(1), &AuthContext::system())
-        .unwrap();
-    assert_eq!(production["name"], "The Magic Flute");
+    assert_eq!(service.schema.tables.len(), 15);
+    assert_eq!(
+        service
+            .list("price", &ListOptions::default(), &AuthContext::system())
+            .unwrap()["total"],
+        3
+    );
     assert!(output.join("support/runtime/src/web.rs").is_file());
     assert!(!output.join("server.ts").exists());
     let manifest = fs::read_to_string(output.join("support/runtime/Cargo.toml")).unwrap();
     assert!(!manifest.contains("workspace = true"));
     let json: Value =
         serde_json::from_slice(&fs::read(output.join("openapi.json")).unwrap()).unwrap();
-    assert!(json["paths"]["/api/productions"].is_object());
+    assert!(json["paths"]["/b2c/orders"].is_object());
+    assert!(json["paths"]["/api/payments/{id}"].get("patch").is_none());
+    assert!(json["paths"].get("/mcp").is_none());
+    assert!(!output.join("support/runtime/src/ui.rs").exists());
+    assert!(!output.join("support/runtime/src/mcp.rs").exists());
+    assert!(!output.join("assets/logo.svg").exists());
+    assert!(!output.join("support/runtime/assets/app.css").exists());
+    assert_eq!(
+        fs::read_to_string(output.join("migrations/001_operator.sql")).unwrap(),
+        "SELECT 1;"
+    );
+}
+
+#[test]
+fn application_modules_support_imports_overrides_and_dependency_errors() {
+    let temp = TempDir::new();
+    fs::copy(
+        root().join("examples/publisher.nix"),
+        temp.0.join("publisher.nix"),
+    )
+    .unwrap();
+    let model = temp.0.join("model.nix");
+    fs::write(
+        &model,
+        r#"{ lib, config, ... }: {
+          imports = [ ./publisher.nix ];
+          organization.name = lib.mkForce "Custom publisher";
+          organization.description = lib.mkForce config.organization.name;
+          currency = lib.mkForce "EUR";
+          capabilities.catalog.entities = { product = "publication"; price = "offer"; };
+        }"#,
+    )
+    .unwrap();
+    let output = temp.0.join("generated");
+    let run = || {
+        Command::new(env!("CARGO_BIN_EXE_openb2c"))
+            .arg(&model)
+            .arg("--out")
+            .arg(&output)
+            .current_dir(&temp.0)
+            .output()
+            .unwrap()
+    };
+    let result = run();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let schema = fs::read(output.join("schema.json")).unwrap();
+    let json: Value = serde_json::from_slice(&schema).unwrap();
+    assert_eq!(json["organization"]["name"], "Custom publisher");
+    assert_eq!(json["organization"]["description"], "Custom publisher");
+    assert_eq!(json["currency"], "EUR");
+    assert_eq!(json["tables"]["offer"]["currency"]["default"], "'EUR'");
+    let evaluated: Schema = serde_json::from_slice(&schema).unwrap();
+    assert!(evaluated.seed.reference.is_empty());
+    assert!(evaluated.seed.apply_fixtures_by_default);
+    let service = Service::open(evaluated, ":memory:", false).unwrap();
+    assert_eq!(service.b2c_catalog().unwrap()["items"], json!([]));
+    // Existing IDs and operator edits must survive demo initialization.
+    service.db.execute_batch(
+        "INSERT INTO publication (id, code, name) VALUES (1, 'operator-product', 'Operator product'), (42, 'digital-book', 'Edited title');
+         INSERT INTO offer (id, product_id, amount_minor, billing_interval) VALUES (1, 1, 1500, 'one_off');"
+    ).unwrap();
+    let demo = openb2c_schema::sql::seed_sql(&service.schema, true).unwrap();
+    service.db.execute_batch(&demo).unwrap();
+    service.db.execute_batch(&demo).unwrap();
+    let items = service.b2c_catalog().unwrap();
+    assert_eq!(items["items"].as_array().unwrap().len(), 3);
+    let book = items["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["product"]["code"] == "digital-book")
+        .unwrap();
+    assert_eq!(book["product"]["id"], 42);
+    assert_eq!(book["product"]["name"], "Edited title");
+    assert_eq!(book["prices"].as_array().unwrap().len(), 1);
+    assert_eq!(book["prices"][0]["product_id"], 42);
+    assert_eq!(book["prices"][0]["amount_minor"], 1500);
+    assert_eq!(book["prices"][0]["currency"], "EUR");
+    assert_eq!(
+        service
+            .db
+            .query_row("SELECT count(*) FROM offer", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        4
+    );
+
+    fs::write(&model, "{...}: { orders.enable = true; }").unwrap();
+    let result = run();
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("orders requires customers"));
+    assert_eq!(fs::read(output.join("schema.json")).unwrap(), schema);
+
+    fs::write(
+        &model,
+        r#"{ lib, ... }: {
+          imports = [ ./publisher.nix ];
+          orders.enable = lib.mkForce false;
+        }"#,
+    )
+    .unwrap();
+    let result = run();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let reduced: Value =
+        serde_json::from_slice(&fs::read(output.join("schema.json")).unwrap()).unwrap();
+    assert!(reduced["capabilities"].get("orders").is_none());
+    assert!(reduced["tables"].get("purchase_order").is_none());
+    assert!(reduced["tables"].get("order_payment").is_none());
+    assert!(reduced["tables"].get("subscription").is_some());
 }
 
 #[test]
@@ -187,7 +317,7 @@ fn roundtrip() {
 fn generated_duchy_sql_matches_existing_tables_keys_indexes_and_seed_counts() {
     // Differential test against the captured pre-migration baseline. This checks
     // actual SQLite structures and data, independent of SQL formatting.
-    let input = evaluate_duchy();
+    let input = evaluate("crates/openb2c-runtime/tests/fixtures/composition.nix");
     let model: Schema = serde_json::from_slice(&input).unwrap();
     let legacy: Value =
         serde_json::from_str(include_str!("fixtures/duchy-typescript-baseline.json")).unwrap();

@@ -262,6 +262,9 @@ impl Service {
         row: Option<&Value>,
     ) -> Result<()> {
         let policy = self.policy(table, action)?;
+        if !policy.enabled {
+            return Err(ServiceError::new("not_found", "Operation is disabled"));
+        }
         if table.starts_with("identity_") {
             return Err(ServiceError::new(
                 "forbidden",
@@ -879,7 +882,7 @@ impl Service {
         Ok(())
     }
 
-    fn application_constraints(&self, table: &str, row: &Value) -> Result<()> {
+    pub(crate) fn application_constraints(&self, table: &str, row: &Value) -> Result<()> {
         let Some(group) = self.schema.constraints.get(table) else {
             return Ok(());
         };
@@ -1310,6 +1313,9 @@ impl Service {
 
     /// Read existing bcrypt bearer credentials; native credential issuance is separate.
     pub fn authenticate(&self, token: &str) -> Result<AuthContext> {
+        if token.starts_with("pwd_") {
+            return self.authenticate_password_session(token);
+        }
         if token.starts_with("sess_") && self.schema.tables.contains_key("identity_session") {
             let prefix: String = token.chars().take(16).collect();
             let rows = self.query("SELECT id, user_id, token_hash FROM identity_session WHERE revoked = 0 AND token_prefix = ? AND julianday(expires_at) > julianday('now')", &[SqlValue::Text(prefix)])?;

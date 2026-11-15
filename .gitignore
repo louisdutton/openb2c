@@ -1,6 +1,5 @@
 *.bin
 *.bin.dSYM
-.direnv
 result
 example/public
 *.db

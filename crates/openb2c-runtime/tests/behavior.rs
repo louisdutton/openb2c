@@ -387,28 +387,10 @@ fn schema_validation_catches_multiple_assignment_sources_and_dangling_fks() {
 }
 
 #[tokio::test]
-async fn http_contract_and_html_escaping() {
+async fn http_crud_and_etag_contract() {
     use axum::{body::Body, http::Request};
-    use http_body_util::BodyExt;
     use tower::ServiceExt;
     let app = openb2c_runtime::router(setup(), "{}".into(), false);
-    let response = app
-        .clone()
-        .oneshot(Request::get("/").body(Body::empty()).unwrap())
-        .await
-        .unwrap();
-    assert_eq!(response.status(), 200);
-    let text = String::from_utf8(
-        response
-            .into_body()
-            .collect()
-            .await
-            .unwrap()
-            .to_bytes()
-            .to_vec(),
-    )
-    .unwrap();
-    assert!(text.contains("Example &lt;Opera&gt;"));
     let response = app
         .clone()
         .oneshot(

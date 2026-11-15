@@ -1,4 +1,5 @@
 //! The evaluated Nix composition is the sole application model.
+pub mod capabilities;
 pub mod contract;
 pub mod inference;
 pub mod migration;
@@ -22,9 +23,29 @@ pub struct Schema {
     pub constraints: BTreeMap<String, ConstraintGroup>,
     pub derived: BTreeMap<String, BTreeMap<String, DerivedField>>,
     pub seed: Seed,
+    pub capabilities: BTreeMap<String, capabilities::Capability>,
     // Preserve capability metadata verbatim so no second schema is introduced.
     #[serde(flatten)]
     pub metadata: BTreeMap<String, Value>,
+}
+
+impl Schema {
+    /// Integration environment requirements follow selected consumers, not unused providers.
+    pub fn integration_active(&self, kind: &str) -> bool {
+        let effects = || {
+            self.operations
+                .values()
+                .flat_map(|ops| ops.values())
+                .flat_map(|op| op.effects.iter())
+        };
+        match kind {
+            "identityEmail" => self.tables.contains_key("identity_challenge"),
+            "emailEffects" => effects().any(|e| e["notify"]["template"]["channel"] == "email"),
+            "webhookEffects" => effects().any(|e| e["call"]["service"] == "webhook"),
+            "payment" | "paymentWebhook" => false,
+            _ => true,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -32,7 +53,6 @@ pub struct Schema {
 pub struct Organization {
     pub name: String,
     pub description: String,
-    pub logo: Option<Value>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -195,9 +215,11 @@ pub struct Relationship {
     pub field: FieldRef,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Operation {
+    #[serde(default = "enabled_by_default")]
+    pub enabled: bool,
     pub guard: Option<Expr>,
     pub relationships: Vec<Relationship>,
     pub public: bool,
@@ -209,6 +231,29 @@ pub struct Operation {
     pub set: Assignments,
     pub cascade: Vec<Cascade>,
     pub effects: Vec<Value>,
+}
+
+fn enabled_by_default() -> bool {
+    true
+}
+
+impl Default for Operation {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            guard: None,
+            relationships: Vec::new(),
+            public: false,
+            scope: None,
+            policy: Value::Null,
+            presentation: Value::Null,
+            audit: Value::Null,
+            transitions: Vec::new(),
+            set: BTreeMap::new(),
+            cascade: Vec::new(),
+            effects: Vec::new(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -240,9 +285,26 @@ pub struct DerivedField {
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Seed {
+    pub catalog: BTreeMap<String, DemoProduct>,
     pub reference: BTreeMap<String, Vec<BTreeMap<String, Value>>>,
     pub fixtures: BTreeMap<String, Vec<BTreeMap<String, Value>>>,
     pub apply_fixtures_by_default: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DemoProduct {
+    pub name: String,
+    pub description: Option<String>,
+    pub currency: String,
+    pub prices: Vec<DemoPrice>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DemoPrice {
+    pub amount: i64,
+    pub interval: String,
 }
 
 /// FK syntax is structural; relationship labels never create edges.

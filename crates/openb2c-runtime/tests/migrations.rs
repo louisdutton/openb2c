@@ -105,47 +105,6 @@ fn migration_plans_preserve_destructive_changes_for_manual_review() {
     assert!(plan.steps.iter().any(|s| s.kind == "manual"));
     assert!(!openb2c_schema::migration::stub(&plan).contains("DROP TABLE"));
 }
-#[test]
-fn concurrent_checkouts_on_separate_connections_cannot_oversell() {
-    let temp = Temp::new();
-    let db = temp.0.join("app.sqlite");
-    let a = Service::open(common::schema(), &db, true).unwrap();
-    let b = Service::open(common::schema(), &db, true).unwrap();
-    a.db.execute("UPDATE venue SET capacity=1 WHERE id=1", [])
-        .unwrap();
-    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
-    let jobs = [a, b]
-        .into_iter()
-        .enumerate()
-        .map(|(i, service)| {
-            let barrier = barrier.clone();
-            std::thread::spawn(move || {
-                barrier.wait();
-                let auth = AuthContext {
-                    user_id: Some(i as i64 + 1),
-                    scopes: service.self_scopes(),
-                };
-                service
-                    .checkout(&json!({"items":[{"item_id":1,"quantity":1}]}), &auth)
-                    .is_ok()
-            })
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(
-        jobs.into_iter()
-            .map(|j| j.join().unwrap())
-            .filter(|v| *v)
-            .count(),
-        1
-    );
-    let service = Service::open(common::schema(), &db, false).unwrap();
-    let count: i64 = service
-        .db
-        .query_row("SELECT count(*) FROM ticket", [], |r| r.get(0))
-        .unwrap();
-    assert_eq!(count, 1);
-    let _: Value = json!({});
-}
 
 #[test]
 fn existing_typescript_databases_upgrade_without_losing_records_or_history() {

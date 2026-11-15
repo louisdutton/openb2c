@@ -130,7 +130,13 @@ pub fn openapi(schema: &Schema) -> Value {
         &schema.organization.name
     };
     let graph = inference::report(schema);
-    let mut doc = json!({"openapi":"3.1.0","info":{"title":name,"description":schema.organization.description,"version":"0.1.0"},"paths":{},"components":{"schemas":{},"securitySchemes":{"bearerAuth":{"type":"http","scheme":"bearer"},"certificateAuth":{"type":"apiKey","in":"header","name":"X-Certificate"}}},"x-openb2c":graph,"x-openb2c-app":{"name":name,"version":"0.1.0","organization":schema.organization},"x-openb2c-auth":schema.metadata.get("auth"),"x-openb2c-audit":schema.metadata.get("audit"),"x-openb2c-integrations":schema.metadata.get("integrations"),"x-openb2c-effect-contracts":schema.metadata.get("effectContracts"),"x-openb2c-workflow":schema.metadata.get("presentation"),"x-openb2c-api-versioning":{"currentVersion":"0.1.0","requestHeader":"X-OpenB2C-API-Version","responseHeader":"X-OpenB2C-API-Version"},"x-openb2c-ui":{"relationships":graph["relationships"],"profileExtensions":graph["profileExtensions"],"commerce":graph["commerce"]}});
+    let mut doc = json!({"openapi":"3.1.0","info":{"title":name,"description":schema.organization.description,"version":"0.1.0"},"paths":{},"components":{"schemas":{},"securitySchemes":{"bearerAuth":{"type":"http","scheme":"bearer"},"certificateAuth":{"type":"apiKey","in":"header","name":"X-Certificate"}}},"x-openb2c":graph,"x-openb2c-app":{"name":name,"version":"0.1.0","organization":schema.organization},"x-openb2c-auth":schema.metadata.get("auth"),"x-openb2c-audit":schema.metadata.get("audit"),"x-openb2c-integrations":schema.metadata.get("integrations"),"x-openb2c-effect-contracts":schema.metadata.get("effectContracts"),"x-openb2c-workflow":schema.metadata.get("presentation"),"x-openb2c-api-versioning":{"currentVersion":"0.1.0","requestHeader":"X-OpenB2C-API-Version","responseHeader":"X-OpenB2C-API-Version"}});
+    if !schema.tables.contains_key("identity_registry") {
+        doc["components"]["securitySchemes"]
+            .as_object_mut()
+            .unwrap()
+            .remove("certificateAuth");
+    }
     for (table, cols) in &schema.tables {
         if table.starts_with("identity_") {
             continue;
@@ -184,6 +190,14 @@ pub fn openapi(schema: &Schema) -> Value {
             .filter(|(n, _)| !["read", "create", "update", "delete"].contains(&n.as_str()))
             .map(|(n, _)| (n.clone(), "post", true));
         for (action, method, item) in actions.into_iter().chain(custom) {
+            if schema
+                .operations
+                .get(table)
+                .and_then(|ops| ops.get(&action))
+                .is_some_and(|op| !op.enabled)
+            {
+                continue;
+            }
             let custom = !["read", "create", "update", "delete"].contains(&action.as_str());
             let path = if custom {
                 format!("/api/{table}s/{{id}}/{}", action.replace('_', "-"))
@@ -242,7 +256,11 @@ pub fn openapi(schema: &Schema) -> Value {
             }
             entry["parameters"] = json!(params);
             if metadata["public"] != true {
-                entry["security"] = json!([{"bearerAuth":[]},{"certificateAuth":[]}]);
+                entry["security"] = if schema.tables.contains_key("identity_registry") {
+                    json!([{ "bearerAuth": [] }, { "certificateAuth": [] }])
+                } else {
+                    json!([{ "bearerAuth": [] }])
+                };
             }
             if ["create", "update"].contains(&action.as_str()) {
                 entry["requestBody"] = json!({"required":true,"content":{"application/json":{"schema":{"$ref":format!("#/components/schemas/{entity}{}",if action=="create"{"Input"}else{"Patch"})}}}});
@@ -271,36 +289,16 @@ pub fn openapi(schema: &Schema) -> Value {
         ("/identity/verify", "post", true),
         ("/auth/context", "get", false),
         ("/auth/revoke-current", "post", false),
-        ("/mcp", "post", false),
         ("/ops/effects", "get", false),
         ("/ops/effects/retry", "post", false),
         ("/ops/fake-emails", "get", false),
         ("/ops/metrics", "get", false),
     ] {
+        if path.starts_with("/identity/") && !schema.tables.contains_key("identity_challenge") {
+            continue;
+        }
         doc["paths"][path] = json!({method:{"responses":{"200":{"description":"Success"}},"security":if public{json!([])}else{json!([{"bearerAuth":[]}])}}});
     }
-    if let Ok(Some(c)) = inference::commerce(schema) {
-        doc["x-openb2c-commerce"] = json!(c);
-        for (path, method, public) in [
-            ("/commerce/catalog", "get", true),
-            ("/commerce/checkout", "post", false),
-            ("/commerce/orders/{id}/payment-session", "post", false),
-            ("/commerce/orders/expire", "post", false),
-            ("/commerce/bookings/reserve", "post", false),
-            ("/commerce/bookings/{id}/payment-session", "post", false),
-            ("/commerce/payments/webhook", "post", true),
-            ("/commerce/payments/local-simulator", "get", false),
-        ] {
-            let mut entry = json!({"responses":{"200":{"description":"Success"}},"security":if public{json!([])}else{json!([{"bearerAuth":[]}])}});
-            if path.contains("{id}") {
-                entry["parameters"] =
-                    json!([{"name":"id","in":"path","required":true,"schema":{"type":"integer"}}]);
-            }
-            if method == "post" {
-                entry["requestBody"] = json!({"required":true,"content":{"application/json":{"schema":{"type":"object"}}}});
-            }
-            doc["paths"][path] = json!({method:entry});
-        }
-    }
+    crate::capabilities::add_openapi(schema, &mut doc);
     doc
 }

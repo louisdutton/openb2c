@@ -91,12 +91,11 @@ struct Metrics {
     total_duration_ms: u128,
 }
 #[derive(Clone)]
-pub(crate) struct AppState {
+struct AppState {
     pub service: Arc<Mutex<Service>>,
     pub openapi: Arc<String>,
     pub settings: Settings,
     pub registry: Arc<Registry>,
-    pub logo: Arc<Option<(Vec<u8>, String)>>,
     metrics: Arc<Mutex<Metrics>>,
 }
 
@@ -127,21 +126,19 @@ pub fn router_with_settings(
     settings: Settings,
     registry: Registry,
 ) -> Router {
-    build_router(service, openapi, settings, registry, None)
+    build_router(service, openapi, settings, registry)
 }
 fn build_router(
     service: Service,
     openapi: String,
     settings: Settings,
     registry: Registry,
-    logo: Option<(Vec<u8>, String)>,
 ) -> Router {
     let state = AppState {
         service: Arc::new(Mutex::new(service)),
         openapi: Arc::new(openapi),
         settings,
         registry: Arc::new(registry),
-        logo: Arc::new(logo),
         metrics: Arc::new(Mutex::new(Metrics {
             started_at: crate::identity::now(),
             requests: 0,
@@ -156,18 +153,13 @@ pub async fn serve(schema_json: &str, openapi: &str) -> anyhow::Result<()> {
     serve_at(schema_json, openapi, Path::new(".")).await
 }
 pub async fn serve_at(schema_json: &str, openapi: &str, root: &Path) -> anyhow::Result<()> {
-    serve_embedded(schema_json, openapi, root, None, false).await
-}
-pub async fn serve_embedded(
-    schema_json: &str,
-    openapi: &str,
-    root: &Path,
-    logo: Option<(&[u8], &str)>,
-    mcp_http: bool,
-) -> anyhow::Result<()> {
     let schema: openb2c_schema::Schema = serde_json::from_str(schema_json)?;
     let settings = Settings::from_environment()?;
-    let registry = Registry::from_environment()?;
+    let registry = if schema.tables.contains_key("identity_registry") {
+        Registry::from_environment()?
+    } else {
+        Registry::ephemeral()?
+    };
     for (kind, integration) in schema
         .metadata
         .get("integrations")
@@ -175,29 +167,7 @@ pub async fn serve_embedded(
         .into_iter()
         .flatten()
     {
-        let commerce = schema
-            .metadata
-            .get("commerce")
-            .is_some_and(|c| c["enabled"] == true);
-        let effects = schema
-            .operations
-            .values()
-            .flat_map(|ops| ops.values())
-            .flat_map(|op| op.effects.iter())
-            .collect::<Vec<_>>();
-        let active = match kind.as_str() {
-            "identityEmail" => schema.tables.contains_key("identity_challenge"),
-            "emailEffects" => {
-                commerce
-                    || effects
-                        .iter()
-                        .any(|e| e["notify"]["template"]["channel"] == "email")
-            }
-            "payment" | "paymentWebhook" => commerce,
-            "webhookEffects" => effects.iter().any(|e| e["call"]["service"] == "webhook"),
-            _ => true,
-        };
-        if !active {
+        if !schema.integration_active(kind) {
             continue;
         }
         for (name, spec) in integration["env"].as_object().into_iter().flatten() {
@@ -216,16 +186,10 @@ pub async fn serve_embedded(
         "{}",
         json!({"level":"info","message":"startup diagnostics","version":settings.version,"database":db,"authEnabled":settings.auth_enabled,"migrationCount":service.query("SELECT id FROM openb2c_migration", &[])?.len()})
     );
-    let app = build_router(
-        service,
-        openapi.into(),
-        settings,
-        registry,
-        logo.map(|(bytes, mime)| (bytes.to_vec(), mime.into())),
-    );
+    let app = build_router(service, openapi.into(), settings, registry);
     let host = env::var("HOST").unwrap_or_else(|_| "127.0.0.1".into());
-    let port = env::var(if mcp_http { "MCP_PORT" } else { "PORT" })
-        .unwrap_or_else(|_| if mcp_http { "3090" } else { "3085" }.into())
+    let port = env::var("PORT")
+        .unwrap_or_else(|_| "3085".into())
         .parse::<u16>()?;
     let listener = tokio::net::TcpListener::bind((host.as_str(), port)).await?;
     eprintln!(
@@ -378,18 +342,7 @@ async fn handle(State(state): State<AppState>, request: Request<Body>) -> Respon
     response
 }
 
-pub(crate) fn cookie(headers: &HeaderMap, name: &str) -> Option<String> {
-    headers
-        .get("cookie")
-        .and_then(|h| h.to_str().ok())
-        .and_then(|s| {
-            s.split(';')
-                .filter_map(|p| p.trim().split_once('='))
-                .find(|(k, _)| *k == name)
-                .map(|(_, v)| v.into())
-        })
-}
-pub(crate) fn authenticate(
+fn authenticate(
     state: &AppState,
     service: &Service,
     headers: &HeaderMap,
@@ -400,6 +353,12 @@ pub(crate) fn authenticate(
         return Ok(AuthContext::system());
     }
     if let Some(certificate) = headers.get("x-certificate") {
+        if !service.schema.tables.contains_key("identity_registry") {
+            return Err(ServiceError::new(
+                "unauthorized",
+                "Certificate identity is not enabled",
+            ));
+        }
         use base64::Engine;
         let text = certificate
             .to_str()
@@ -427,18 +386,15 @@ pub(crate) fn authenticate(
             .ok_or_else(|| ServiceError::new("unauthorized", "Expected bearer credential"))?;
         return service.authenticate(token);
     }
-    if let Some(token) = cookie(headers, "openb2c_session") {
-        return Ok(service.authenticate(&token).unwrap_or_default());
-    }
     Ok(AuthContext::default())
 }
-pub(crate) fn header<'a>(headers: &'a HeaderMap, name: &str) -> &'a str {
+fn header<'a>(headers: &'a HeaderMap, name: &str) -> &'a str {
     headers
         .get(name)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
 }
-pub(crate) fn client_ip(headers: &HeaderMap) -> &str {
+fn client_ip(headers: &HeaderMap) -> &str {
     ["x-forwarded-for", "x-real-ip", "x-openb2c-peer-ip"]
         .into_iter()
         .map(|name| header(headers, name).split(',').next().unwrap_or("").trim())
@@ -498,20 +454,62 @@ fn dispatch(
     headers: &HeaderMap,
     bytes: &[u8],
 ) -> Result<Response> {
-    let _source = crate::service::SourceScope::enter(if path == "/mcp" {
-        "mcp"
-    } else if path.starts_with("/api/") || path.starts_with("/commerce/") {
-        "rest"
-    } else {
-        "ui"
-    });
+    let _source = crate::service::SourceScope::enter("rest");
     let service = state
         .service
         .lock()
         .map_err(|_| ServiceError::new("internal_error", "Service unavailable"))?;
     let auth = authenticate(state, &service, headers, method.as_str(), path)?;
+    if matches!(
+        path,
+        "/auth/signup" | "/auth/login" | "/auth/logout" | "/auth/password"
+    ) {
+        if !service.schema.capabilities.contains_key("password_auth") || *method != Method::POST {
+            return Err(ServiceError::new(
+                "not_found",
+                "Unknown authentication endpoint",
+            ));
+        }
+        let peer = headers
+            .get("x-openb2c-peer-ip")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("unknown");
+        let token = header(headers, "authorization")
+            .strip_prefix("Bearer ")
+            .unwrap_or("");
+        let value = match path {
+            "/auth/signup" => service.password_signup(&json_body(headers, bytes)?, peer)?,
+            "/auth/login" => service.password_login(&json_body(headers, bytes)?, peer)?,
+            "/auth/password" => {
+                service.password_change(token, &json_body(headers, bytes)?, peer)?
+            }
+            _ => {
+                if !bytes.is_empty() && json_body(headers, bytes)? != json!({}) {
+                    return Err(ServiceError::new(
+                        "invalid",
+                        "Logout accepts an empty object",
+                    ));
+                }
+                service.password_logout(token)?
+            }
+        };
+        let mut response = axum::Json(value).into_response();
+        response
+            .headers_mut()
+            .insert("cache-control", HeaderValue::from_static("no-store"));
+        if path == "/auth/signup" {
+            *response.status_mut() = StatusCode::CREATED;
+        }
+        return Ok(response);
+    }
+    if path.starts_with("/identity/") && !service.schema.tables.contains_key("identity_challenge") {
+        return Err(ServiceError::new(
+            "not_found",
+            "Identity capability is not enabled",
+        ));
+    }
     if path == "/health" {
-        return Ok(axum::Json(json!({"status":"ok","app":crate::ui::slug(&service.schema.organization.name),"version":state.settings.version,"auth":state.settings.auth_enabled})).into_response());
+        return Ok(axum::Json(json!({"status":"ok","app":crate::text::slug(&service.schema.organization.name),"version":state.settings.version,"auth":state.settings.auth_enabled})).into_response());
     }
     if path == "/openapi.json" {
         return Ok((
@@ -553,7 +551,6 @@ fn dispatch(
                 .ok_or_else(|| ServiceError::new("invalid", "challengeId is required"))?,
             input["code"].as_str().unwrap_or(""),
             input["signature"].as_str().unwrap_or(""),
-            None,
         )?;
         return Ok(axum::Json(value).into_response());
     }
@@ -567,7 +564,6 @@ fn dispatch(
         if let Some(token) = header(headers, "authorization")
             .strip_prefix("Bearer ")
             .map(str::to_string)
-            .or_else(|| cookie(headers, "openb2c_session"))
         {
             service.revoke_session(&token)?;
         } else if let Some(cert) = headers.get("x-certificate").and_then(|s| s.to_str().ok()) {
@@ -588,43 +584,6 @@ fn dispatch(
             ));
         }
         return Ok(ok(json!({"revoked":true})));
-    }
-    if path == "/mcp" && method == Method::POST {
-        use rusqlite::OptionalExtension;
-        let input = json_body(headers, bytes)?;
-        service.db.execute_batch("CREATE TABLE IF NOT EXISTS openb2c_mcp_session(id TEXT PRIMARY KEY,expires_at TEXT NOT NULL);")?;
-        let initialize = input["method"] == "initialize";
-        let session = if initialize {
-            secret("mcp_")?
-        } else {
-            let id = header(headers, "mcp-session-id");
-            let valid:Option<String>=service.db.query_row("SELECT id FROM openb2c_mcp_session WHERE id=? AND julianday(expires_at)>julianday('now')",[id],|r|r.get(0)).optional()?;
-            if valid.is_none() {
-                return Ok((StatusCode::BAD_REQUEST,axum::Json(json!({"jsonrpc":"2.0","id":input.get("id"),"error":{"code":-32600,"message":"Invalid or missing session ID"}}))).into_response());
-            }
-            require_mcp_auth(&auth)?;
-            id.to_string()
-        };
-        if initialize {
-            service.db.execute(
-                "DELETE FROM openb2c_mcp_session WHERE julianday(expires_at)<=julianday('now')",
-                [],
-            )?;
-            service.db.execute(
-                "INSERT INTO openb2c_mcp_session(id,expires_at) VALUES (?,?)",
-                [&session, &crate::identity::after(86400)],
-            )?;
-        }
-        if input.get("id").is_none() {
-            return Ok(StatusCode::ACCEPTED.into_response());
-        }
-        let mut response = axum::Json(crate::mcp::respond(&service, &input, &auth)).into_response();
-        response.headers_mut().insert(
-            "mcp-session-id",
-            HeaderValue::from_str(&session)
-                .map_err(|_| ServiceError::new("internal_error", "Invalid session ID"))?,
-        );
-        return Ok(response);
     }
     if path.starts_with("/ops/") {
         protected(&auth, "effect.admin")?;
@@ -659,47 +618,10 @@ fn dispatch(
         };
         return Ok(axum::Json(value).into_response());
     }
-    if path.starts_with("/commerce/") {
-        let segments = path.trim_matches('/').split('/').collect::<Vec<_>>();
-        let value = match (method.as_str(), segments.as_slice()) {
-            ("GET", ["commerce", "catalog"]) => service.catalog()?,
-            ("POST", ["commerce", "checkout"]) => {
-                service.checkout(&json_body(headers, bytes)?, &auth)?
-            }
-            ("POST", ["commerce", "bookings", "reserve"]) => {
-                service.reserve_booking(&json_body(headers, bytes)?, &auth)?
-            }
-            ("POST", ["commerce", "orders" | "bookings", id, "payment-session"]) => {
-                service.payment_session(&parse_id(id)?, &auth)?
-            }
-            ("POST", ["commerce", "orders" | "bookings", "expire"]) => {
-                protected(&auth, "commerce.expire")?;
-                service.expire_orders()?
-            }
-            ("POST", ["commerce", "payments", "webhook"]) => {
-                let secret = env::var("PAYMENT_WEBHOOK_SECRET").unwrap_or_default();
-                if secret.is_empty()
-                    || !crate::effects::verify_hmac(
-                        &secret,
-                        bytes,
-                        header(headers, "x-payment-signature"),
-                    )
-                {
-                    return Err(ServiceError::new(
-                        "unauthorized",
-                        "Invalid payment webhook signature",
-                    ));
-                }
-                service.payment_webhook(&json_body(headers, bytes)?)?
-            }
-            ("GET", ["commerce", "payments", "local-simulator"]) => {
-                return crate::ui::page(
-                    state, &service, method, path, query, headers, bytes, &auth,
-                );
-            }
-            _ => return Err(ServiceError::new("not_found", "Unknown commerce endpoint")),
-        };
-        return Ok(ok(value));
+    if path.starts_with("/b2c/") {
+        return Ok(ok(crate::b2c::rest::dispatch(
+            &service, method, path, headers, bytes, &auth,
+        )?));
     }
     if path.starts_with("/api/") {
         let parts = path
@@ -819,9 +741,9 @@ fn dispatch(
         };
         return Ok(response);
     }
-    crate::ui::page(state, &service, method, path, query, headers, bytes, &auth)
+    Err(ServiceError::new("not_found", "Unknown endpoint"))
 }
-pub(crate) fn parse_id(s: &str) -> Result<Value> {
+fn parse_id(s: &str) -> Result<Value> {
     s.parse::<i64>()
         .map(|v| json!(v))
         .map_err(|_| ServiceError::new("invalid", "ID must be an integer"))
@@ -832,16 +754,6 @@ fn parse_entity_id(service: &Service, table: &str, id: &str) -> Result<Value> {
         parse_id(id)
     } else {
         Ok(json!(id))
-    }
-}
-pub fn escape(s: &str) -> String {
-    crate::ui::escape(s)
-}
-fn require_mcp_auth(auth: &AuthContext) -> Result<()> {
-    if auth.user_id.is_some() || auth.has_scope("*") {
-        Ok(())
-    } else {
-        Err(ServiceError::new("unauthorized", "Authentication required"))
     }
 }
 async fn shutdown() {

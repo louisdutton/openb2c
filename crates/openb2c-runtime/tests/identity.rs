@@ -29,14 +29,14 @@ fn otp_hashes_key_proof_single_use_and_bearer_revocation() {
     assert!(bcrypt::verify(&code, &hash).unwrap());
     assert_eq!(
         service
-            .verify_challenge(&registry, id, &code, "00", None)
+            .verify_challenge(&registry, id, &code, "00")
             .unwrap_err()
             .code,
         "invalid"
     );
     let signature = hex::encode(key.sign(code.as_bytes()).to_bytes());
     let result = service
-        .verify_challenge(&registry, id, &code, &signature, None)
+        .verify_challenge(&registry, id, &code, &signature)
         .unwrap();
     let token = result["sessionToken"].as_str().unwrap();
     assert!(token.starts_with("sess_"));
@@ -48,35 +48,13 @@ fn otp_hashes_key_proof_single_use_and_bearer_revocation() {
     assert!(auth.scopes.contains(&"booking.create".into()));
     assert!(
         service
-            .verify_challenge(&registry, id, &code, &signature, None)
+            .verify_challenge(&registry, id, &code, &signature)
             .is_err()
     );
     service.revoke_session(token).unwrap();
     assert_eq!(
         service.authenticate(token).unwrap_err().code,
         "unauthorized"
-    );
-}
-#[test]
-fn browser_login_requires_cookie_proof_as_well_as_otp() {
-    let service = service();
-    let registry = Registry::ephemeral().unwrap();
-    let (id, code) = service
-        .challenge("browser@example.test", "browser:secret-proof", "browser")
-        .unwrap();
-    assert!(
-        service
-            .verify_challenge(&registry, id, &code, "", Some("wrong"))
-            .is_err()
-    );
-    let result = service
-        .verify_challenge(&registry, id, &code, "", Some("secret-proof"))
-        .unwrap();
-    assert!(result["certificate"].is_null());
-    assert!(
-        service
-            .authenticate(result["sessionToken"].as_str().unwrap())
-            .is_ok()
     );
 }
 #[test]
@@ -137,7 +115,7 @@ fn verification_attempts_are_limited_and_expired_challenges_fail() {
     for _ in 0..5 {
         assert_eq!(
             service
-                .verify_challenge(&registry, id, "wrong", "00", None)
+                .verify_challenge(&registry, id, "wrong", "00")
                 .unwrap_err()
                 .code,
             "invalid"
@@ -145,7 +123,7 @@ fn verification_attempts_are_limited_and_expired_challenges_fail() {
     }
     assert_eq!(
         service
-            .verify_challenge(&registry, id, "wrong", "00", None)
+            .verify_challenge(&registry, id, "wrong", "00")
             .unwrap_err()
             .code,
         "rate_limited"
@@ -162,7 +140,7 @@ fn verification_attempts_are_limited_and_expired_challenges_fail() {
         .unwrap();
     assert!(
         service
-            .verify_challenge(&registry, id, &code, "00", None)
+            .verify_challenge(&registry, id, &code, "00")
             .is_err()
     );
 }

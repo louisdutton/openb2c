@@ -1,3 +1,4 @@
+mod evaluate;
 mod generate;
 
 use anyhow::{Context, Result, bail};
@@ -6,7 +7,6 @@ use std::{
     env, fs,
     io::{self, Read},
     path::{Path, PathBuf},
-    process::Command,
 };
 
 fn main() {
@@ -38,7 +38,7 @@ fn run() -> Result<()> {
         match arg.as_str() {
             "--help" | "-h" => {
                 println!(
-                    "Usage: openb2c [--explain[=md|json]] [--out DIR] <composition.nix|->\n\nEvaluates Nix and generates a standalone Rust application in generated.\nUse - to read evaluated JSON from stdin."
+                    "Usage: openb2c [--explain[=md|json]] [--out DIR] <model.nix|->\n\nEvaluates an OpenB2C module and generates a standalone Rust application in generated.\nUse - to read evaluated JSON from stdin."
                 );
                 return Ok(());
             }
@@ -75,18 +75,7 @@ fn run() -> Result<()> {
                     .join("generated"),
             );
         }
-        let result = Command::new("nix")
-            .args(["eval", "--json", "-f"])
-            .arg(&path)
-            .output()
-            .context("Run inside `devenv shell` so Nix and NIX_PATH are available")?;
-        if !result.status.success() {
-            bail!(
-                "Nix evaluation failed:\n{}",
-                String::from_utf8_lossy(&result.stderr)
-            );
-        }
-        String::from_utf8(result.stdout)?
+        evaluate::model(&path)?
     };
     let schema: Schema = serde_json::from_str(&input).context("Invalid evaluated Nix schema")?;
     let errors = validate(&schema);

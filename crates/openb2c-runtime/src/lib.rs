@@ -1,17 +1,17 @@
 //! Shared native runtime copied into each generated application's support crates.
-pub mod commerce;
+pub mod b2c;
 pub mod effects;
 pub mod identity;
-pub mod mcp;
 pub mod migrations;
+pub mod passwords;
 pub mod service;
-pub mod ui;
+mod text;
 pub mod web;
 
 pub use service::{AuthContext, Service};
 pub use web::{router, serve};
 
-/// Resolve identical storage and fixture settings for every transport.
+/// Resolve identical storage and fixture settings for the REST server.
 pub fn open_from_environment(
     schema: openb2c_schema::Schema,
     root: &std::path::Path,
@@ -31,5 +31,5 @@ pub fn open_from_environment(
 
 pub fn database_path(schema: &openb2c_schema::Schema) -> String {
     std::env::var("DB_PATH")
-        .unwrap_or_else(|_| format!("{}.sqlite", ui::slug(&schema.organization.name)))
+        .unwrap_or_else(|_| format!("{}.sqlite", text::slug(&schema.organization.name)))
 }

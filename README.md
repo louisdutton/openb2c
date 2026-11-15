@@ -1,64 +1,76 @@
 # OpenB2C
 
-OpenB2C composes reusable business capabilities in Nix and generates standalone Rust applications: SQLite storage, typed models, REST, MCP, OpenAPI, and public and admin web pages.
+OpenB2C helps businesses own and adapt their software. Compose business capabilities in Nix and generate a standalone Rust backend with SQLite, REST and OpenAPI. The business keeps its source, data and deployment.
 
-The evaluated Nix schema is authoritative. Foreign keys define the data graph; operations, constraints, field metadata, and temporal fields determine workflows and presentation. There is no parallel UI schema.
+The [publisher example](examples/publisher.nix) combines customers, a catalog, one-off purchases, payments, subscriptions and access rights. Payments are simulated locally; no real payment adapter is included.
 
 ## Run
 
-Install [Devenv](https://devenv.sh/getting-started/) on Linux, then:
+From the repository root, on Linux with [Devenv](https://devenv.sh/getting-started/):
 
 ```sh
 devenv shell
-devenv build outputs.duchyopera-generated
-cat "$(devenv build outputs.duchyopera-generated | jq -r '."outputs.duchyopera-generated"')/inference.md"
-devenv up duchyopera
+devenv build outputs.publisher-generated outputs.publisher
+devenv up publisher
 ```
 
-`devenv up duchyopera` consumes the application output directly. Nix builds the generator, generated sources and application in dependency order and caches each result. There is no generation task that writes into the checkout. Generated sources and inference reports are available through `outputs.duchyopera-generated`; `outputs.duchyopera` contains the runnable binary, and `outputs.generator` contains the CLI.
+The server listens on `http://127.0.0.1:3085`. `/health` reports status, `/b2c/catalog` shows products, and `/openapi.json` describes the enabled endpoints, request formats and required scopes.
 
-Duchy Opera owns its environment in `examples/duchyopera/devenv.nix`. These commands also work after `cd examples/duchyopera`. The root environment imports the example, so it can run the same process and build the same outputs.
+The example uses `publisher.sqlite` in the repository root. Demo products load by default in development and are disabled by default in production. Set `OPENB2C_APPLY_FIXTURES=false` to skip demo loading; existing rows are not deleted.
 
-Open `http://127.0.0.1:3085/` for the public site, `/account` for customer records, and `/admin` for staff. Email verification uses captured development messages. Staff can sign in with an API key; see [authentication](docs/auth-and-authorization.md). To explore locally with system access, run `AUTH_ENABLED=false devenv up duchyopera`.
-
-The generated application serves HTML, CSS, assets, and APIs from one Rust process. Forms use ordinary HTTP and CSRF protection. No JavaScript build or runtime is required.
+The example enables `auth.password.enable`. Sign up directly over HTTP:
 
 ```sh
-devenv build outputs.duchyopera
+curl -fsS http://127.0.0.1:3085/auth/signup \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"customer@example.test","password":"violet-river-sunrise-47"}'
+```
+
+Send the returned `access_token` as `Authorization: Bearer <token>`. Sessions expire after one hour. `POST /auth/login` accepts the same email/password fields; `POST /auth/logout` revokes the current session. `POST /auth/password` accepts `current_password` and a new `password`, revokes previous sessions and returns a new token. Passwords must contain 15–128 characters. Customer permissions are assigned by the service.
+
+Use HTTPS outside local development. Email ownership verification and forgotten-password recovery are not implemented; an email address is currently an account identifier.
+
+For operators and automation, provision a scoped API key from another Devenv shell:
+
+```sh
+app=$(devenv build outputs.publisher | jq -er '."outputs.publisher"')
+"$app/bin/openb2c-app" --create-api-key operator@example.test 'payments.simulate,subscriptions.renew'
+```
+
+Send the returned key as `Authorization: Bearer <key>`. Customer signup never grants these operator permissions.
+
+## Change the application
+
+Edit `examples/publisher.nix` and rebuild. It is an ordinary Nix module: application details come first, capabilities use top-level `<name>.enable` options, and named demo products inherit the global currency. Consumers declare their dependencies; unrelated capabilities remain optional.
+
+Enabled capabilities work together by default: orders use payments, and orders/subscriptions grant access when entitlements are enabled. Opt out on the consumer with `orders.payments.enable = false`, `orders.entitlements.enable = false`, or `subscriptions.entitlements.enable = false`.
+
+The evaluated model is authoritative. Change source modules or generators rather than generated files. Business lifecycles are enforced by capability services; generic table writes cannot bypass payment, order, subscription or access rules.
+
+Build outputs are:
+
+- `outputs.generator`: the generator CLI.
+- `outputs.publisher-generated`: standalone Rust sources, SQL, OpenAPI and dependency lock.
+- `outputs.publisher`: the application binary used by the publisher process.
+
+To export a Cargo project:
+
+```sh
+devenv shell -- cargo run -p openb2c -- --out generated examples/publisher.nix
+```
+
+Existing databases need reviewed migrations when their schema changes. Keep application data and operator-owned migrations outside immutable build outputs.
+
+## Development
+
+```sh
 devenv test
 ```
 
-Normal HTTP listens on port 3085; MCP HTTP uses 3090 and requires initialization and authenticated subsequent requests. Stdio MCP is trusted local access. Both transports use the same services and database settings.
+The root Devenv environment provides Rust, formatting and Clippy hooks, workspace tests, build outputs and the publisher process. Rust packages build through `languages.rust.import`.
 
-## Structure
+`nix/model/` contains the modelling system; `nix/build/` contains packaging and generation helpers. `crates/` contains the schema compiler, generator and runtime. Tests and option definitions describe the detailed behavior.
 
-```text
-schema/                        Nix option model, helpers, modules and bundles
-crates/openb2c-schema/          Schema, validation, graph inference, SQL and OpenAPI
-crates/openb2c/                 Native generator CLI and Rust model generation
-crates/openb2c-runtime/         SQLite services, auth, commerce, effects, HTTP/MCP and UI
-devenv/shared/                 Shared Rust tooling, hooks, inputs and workspace tests
-nix/                           Generator packaging and reusable source generation
-examples/duchyopera/            Pilot composition, assets and its own Devenv environment
-docs/                          Schema contracts and operating guides
-```
-
-Devenv generation outputs are immutable directories in the Nix store. They contain a Cargo manifest, locked dependencies, support crates, SQL, assets and inference reports. Change the Nix model or source crates and rebuild; do not hand-edit generated files. The CLI still supports writing a standalone project to a composition's `generated/` directory for export or development. Operator migrations and databases belong outside immutable outputs.
-
-## Acceptance case
-
-Duchy Opera exercises public performance booking, ticket checkout, payments, customer accounts, private production scheduling, rehearsals, calls, requirement coverage, materials, and artist profiles. Commerce roles and workspaces come from the graph so the same machinery applies to other compositions.
-
-Payment adapters currently support local/fake settlement, including signed webhook, expiry and refund flows. Production payment providers require their own adapter; setting a provider name does not implement it.
-
-## Development and deployment
-
-Devenv's [built-in Rust support](https://devenv.sh/languages/rust/) supplies Cargo, rustc, rustfmt, Clippy and rust-analyzer from the nixpkgs input pinned in `devenv.lock`. `devenv update` updates environment inputs deliberately; Cargo dependencies are pinned in `Cargo.lock`. `.envrc` uses `use devenv`. Nix compositions resolve `<nixpkgs/lib>` from the same pinned input.
-
-Both binary outputs use `languages.rust.import`, Devenv's built-in crate2nix packaging function. `nix/generator.nix` packages the tool and `nix/generate.nix` generates sources for an evaluated schema. Duchy Opera declares its own model, outputs and process in its Devenv module. `nix/generated-app.lock` pins the common generated application manifest; refresh it with Cargo when the generated dependency contract changes. Lifecycle dependencies are declared on consumers: the server references its application output, and `devenv:enterTest.after` selects the Rust test task.
-
-The environment follows Devenv's [monorepo pattern](https://devenv.sh/guides/monorepo/): YAML imports beginning with `/` resolve from the Git repository root. The root imports `/devenv/shared` and `/examples/duchyopera`; the example imports `/devenv/shared`. Shared inputs are declared once in `devenv/shared/devenv.yaml`. The active environment uses its own lockfile: the root lock for the combined environment, and `examples/duchyopera/devenv.lock` when working directly in the example. Both start from the same pinned inputs. Repository paths use `config.git.root`, so working directories stay consistent from either entry point.
-
-The pinned `git-hooks` input enables the built-in Rustfmt and Clippy hooks, with warnings denied across all workspace targets. Devenv installs these on shell entry and runs them during `devenv test`. The `openb2c:test` task also runs service and contract tests, database upgrades, delivery retries, generated model compilation, and Chromium customer/admin journeys. Tests launch their own isolated servers; the development server is excluded from the test environment. See [migration details](docs/rust-migration.md), [configuration](docs/configuration.md), [deployment](docs/deployment.md), and [SQLite migrations](docs/sqlite-migrations.md).
+The pilot is backend-only. Live billing, taxes, invoices, shipping, inventory and proration are not implemented.
 
 Licensed under [GPL-3.0](LICENSE.md).

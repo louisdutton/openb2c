@@ -1,3 +1,0 @@
-[mcp_servers.openb2c]
-command = "devenv"
-args = ["shell","--","bash","-euc","app_output=$(devenv build outputs.duchyopera | jq -er '.\"outputs.duchyopera\"'); exec \"$app_output/bin/openb2c-app\" --mcp"]

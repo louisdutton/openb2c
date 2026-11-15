@@ -183,13 +183,14 @@ impl Service {
             .iter()
             .flat_map(|(table, ops)| {
                 ops.iter()
-                    .filter(|(_, op)| !op.public && !op.relationships.is_empty())
+                    .filter(|(_, op)| op.enabled && !op.public && !op.relationships.is_empty())
                     .map(move |(name, op)| {
                         op.scope
                             .clone()
                             .unwrap_or_else(|| format!("{table}.{name}"))
                     })
             })
+            .chain(openb2c_schema::capabilities::customer_scopes(&self.schema))
             .collect()
     }
     pub fn ensure_user(&self, email: &str) -> Result<i64> {
@@ -241,7 +242,6 @@ impl Service {
         id: i64,
         code: &str,
         signature: &str,
-        browser_proof: Option<&str>,
     ) -> Result<Value> {
         let challenge = self.db.query_row("SELECT email, code_hash, public_key, expires_at FROM identity_challenge WHERE id = ? AND used = 0", [id], |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?))).optional()?.ok_or_else(|| ServiceError::new("invalid", "Invalid or used challenge"))?;
         for (field, value, limit) in [
@@ -268,8 +268,7 @@ impl Service {
                 "Incorrect or expired verification code",
             ));
         }
-        let browser = browser_proof.is_some_and(|proof| challenge.2 == format!("browser:{proof}"));
-        if !browser && !verify_signature(&challenge.2, code.as_bytes(), signature) {
+        if !verify_signature(&challenge.2, code.as_bytes(), signature) {
             return Err(ServiceError::new(
                 "invalid",
                 "Invalid key ownership signature",
@@ -286,11 +285,7 @@ impl Service {
         self.db.execute("INSERT INTO identity_registry (email, public_key) VALUES (?,?) ON CONFLICT(email) DO UPDATE SET public_key = excluded.public_key, revoked = 0, verified_at = CURRENT_TIMESTAMP", [&challenge.0,&challenge.2])?;
         let user = self.ensure_user(&challenge.0)?;
         let (token, expires) = self.issue_session(user)?;
-        let certificate = if browser {
-            Value::Null
-        } else {
-            json!(registry.issue(&challenge.0, &challenge.2, 365 * 86400)?)
-        };
+        let certificate = json!(registry.issue(&challenge.0, &challenge.2, 365 * 86400)?);
         crate::service::commit(tx)?;
         Ok(
             json!({"certificate":certificate,"sessionToken":token,"sessionExpiresAt":expires,"auth":{"userId":user,"scopes":self.self_scopes()}}),
