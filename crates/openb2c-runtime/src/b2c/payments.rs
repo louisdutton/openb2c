@@ -1,21 +1,10 @@
+//! Customer-initiated transfers. There is deliberately no payment initiation API.
 use super::*;
+use crate::records::{
+    PaymentsPayment as Payment, PaymentsPaymentProvider, PaymentsPaymentStatus as Status,
+    PaymentsPaymentWrite as PaymentWrite, Record,
+};
 use serde::Deserialize;
-
-/// A payment adapter supplies provider references; settlement arrives as events.
-/// The only adapter shipped here is local and cannot contact a payment network.
-pub trait PaymentProvider {
-    fn name(&self) -> &'static str;
-    fn create_reference(&self) -> Result<String>;
-}
-pub struct FakePaymentProvider;
-impl PaymentProvider for FakePaymentProvider {
-    fn name(&self) -> &'static str {
-        "fake"
-    }
-    fn create_reference(&self) -> Result<String> {
-        crate::identity::secret("fake_")
-    }
-}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -24,26 +13,18 @@ struct CreatePayment {
     amount_minor: i64,
     currency: String,
 }
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Simulate {
-    event_id: String,
-    outcome: String,
-}
 
+pub(super) fn reference() -> Result<String> {
+    let mut bytes = [0u8; 8];
+    getrandom::fill(&mut bytes).map_err(|_| invalid("Random source unavailable"))?;
+    Ok(format!("P{}", hex::encode_upper(bytes)))
+}
 impl Service {
     pub fn b2c_pending_payments(&self, auth: &AuthContext) -> Result<Value> {
-        self.cap_command("payments", "payments.simulate", auth)?;
-        let items = self.query(
-            &format!(
-                "SELECT * FROM {} WHERE status='pending' ORDER BY id LIMIT 100",
-                quote(self.cap_table("payments", "payment")?)
-            ),
-            &[],
-        )?;
-        let items = items
-            .into_iter()
-            .map(|row| self.cap_response(self.cap_table("payments", "payment")?, row))
+        self.cap_command("payments", "payments.reconcile", auth)?;
+        let items = Payment::select(self, "WHERE status='pending' ORDER BY id LIMIT 100", &[])?
+            .iter()
+            .map(|r| self.payment_view(r))
             .collect::<Result<Vec<_>>>()?;
         Ok(json!({"items":items}))
     }
@@ -55,36 +36,69 @@ impl Service {
         request_key: &str,
         auth: &AuthContext,
         now: DateTime<Utc>,
-    ) -> Result<Value> {
-        let table = self.cap_table("payments", "payment")?;
-        if amount < 1 || currency.len() != 3 || !currency.bytes().all(|c| c.is_ascii_uppercase()) {
+    ) -> Result<Payment> {
+        if !(1..=1_000_000_000_000).contains(&amount) || currency != "GBP" {
             return Err(invalid(
-                "Payment requires a positive integer amount_minor and a three-letter currency",
+                "Bank transfer requests require a positive GBP amount within range",
             ));
         }
-        let rows = self.query(
-            &format!(
-                "SELECT * FROM {} WHERE user_id=? AND request_key=?",
-                quote(table)
-            ),
-            &[SqlValue::Integer(user), SqlValue::Text(request_key.into())],
-        )?;
-        if let Some(existing) = rows.into_iter().next() {
-            if existing["amount_minor"] != amount || existing["currency"] != currency {
+        if let Some(existing) = Payment::first(
+            self,
+            "WHERE user_id=? AND request_key=?",
+            &[&user, &request_key],
+        )? {
+            if existing.amount_minor != amount || existing.currency != currency {
                 return Err(ServiceError::new(
                     "conflict",
-                    "Payment idempotency key has different amount or currency",
+                    "Payment key has different amount or currency",
                 ));
             }
             return Ok(existing);
         }
-        if self.schema.capabilities["payments"].settings["provider"] != "fake" {
-            return Err(invalid("Only the fake provider is supported"));
+        let destination = self.transfer_destination()?;
+        let reference = reference()?;
+        let row = PaymentWrite {
+            user_id: user.into(),
+            amount_minor: amount.into(),
+            currency: currency.to_owned().into(),
+            provider: PaymentsPaymentProvider::BankTransfer.into(),
+            reference: reference.clone().into(),
+            bank_reference: reference.into(),
+            bank_account: destination.account.into(),
+            beneficiary: destination.name.into(),
+            sort_code: destination.sort_code.into(),
+            account_number: destination.account_number.into(),
+            status: Status::Pending.into(),
+            request_key: request_key.to_owned().into(),
+            created_at: now.to_rfc3339().into(),
+            ..Default::default()
         }
-        let provider = FakePaymentProvider;
-        let row=self.cap_insert(table,json!({"user_id":user,"amount_minor":amount,"currency":currency,"provider":provider.name(),"reference":provider.create_reference()?,"status":"pending","request_key":request_key,"created_at":now.to_rfc3339()}))?;
-        self.cap_audit(table, "payments.create", auth, None, &row)?;
+        .insert(self)?;
+        row.audit(self, "payments.request", auth, None)?;
         Ok(row)
+    }
+    pub(super) fn payment_view(&self, row: &Payment) -> Result<Value> {
+        let mut value = row.wire(self)?;
+        value["instructions"] = json!({"method":"bank_transfer","account_name":row.beneficiary,"sort_code":row.sort_code,"account_number":row.account_number,"reference":row.bank_reference,"amount_minor":row.amount_minor,"currency":row.currency,"simulated":self.cap_setting("payments","feed")==Some("simulated")});
+        // This QR encodes readable instructions, not a universal banking-app URI.
+        let payload = format!(
+            "Bank transfer\nPayee: {}\nSort code: {}\nAccount: {}\nAmount: GBP {}.{:02}\nReference: {}",
+            row.beneficiary,
+            row.sort_code,
+            row.account_number,
+            row.amount_minor / 100,
+            row.amount_minor % 100,
+            row.bank_reference
+        );
+        let code = qrcode::QrCode::new(payload.as_bytes())
+            .map_err(|_| invalid("Payment instructions exceed QR capacity"))?;
+        value["instructions"]["qr_payload"] = json!(payload);
+        value["instructions"]["qr_svg"] = json!(
+            code.render::<qrcode::render::svg::Color>()
+                .min_dimensions(256, 256)
+                .build()
+        );
+        Ok(value)
     }
     pub fn b2c_create_payment(&self, input: &Value, auth: &AuthContext) -> Result<Value> {
         self.cap_command("payments", "payments.create", auth)?;
@@ -92,7 +106,7 @@ impl Service {
         let input: CreatePayment = decode(input)?;
         key(&input.idempotency_key)?;
         let tx = crate::service::transaction(&self.db)?;
-        let payment = self.cap_payment(
+        let row = self.cap_payment(
             user,
             input.amount_minor,
             &input.currency,
@@ -100,92 +114,22 @@ impl Service {
             auth,
             Utc::now(),
         )?;
-        let result = self.cap_response(self.cap_table("payments", "payment")?, payment)?;
+        let response = self.payment_view(&row)?;
         crate::service::commit(tx)?;
-        Ok(result)
+        Ok(response)
     }
     pub fn b2c_payment(&self, id: i64, auth: &AuthContext) -> Result<Value> {
-        self.cap_response(
-            self.cap_table("payments", "payment")?,
-            self.cap_owned("payments", "payment", id, "payments.read", auth)?,
-        )
+        self.payment_view(&self.owned::<Payment>(id, "payments", "payments.read", auth)?)
     }
-    pub fn b2c_simulate_payment(
-        &self,
-        id: i64,
-        input: &Value,
-        auth: &AuthContext,
-    ) -> Result<Value> {
-        self.b2c_simulate_payment_at(id, input, auth, Utc::now())
-    }
-    /// Clock-injected entry point for deterministic local-provider tests.
-    pub fn b2c_simulate_payment_at(
-        &self,
-        id: i64,
-        input: &Value,
-        auth: &AuthContext,
-        now: DateTime<Utc>,
-    ) -> Result<Value> {
-        self.cap_command("payments", "payments.simulate", auth)?;
-        let input: Simulate = decode(input)?;
-        key(&input.event_id)?;
-        if !["succeeded", "failed", "refunded"].contains(&input.outcome.as_str()) {
-            return Err(invalid("Unknown simulated outcome"));
-        }
-        let tx = crate::service::transaction(&self.db)?;
-        let events = self.cap_table("payments", "event")?;
-        if let Some(previous) =
-            self.cap_find(events, "event_key", SqlValue::Text(input.event_id.clone()))?
-        {
-            if previous["payment_id"] != id || previous["outcome"] != input.outcome {
-                return Err(ServiceError::new(
-                    "conflict",
-                    "Event ID is already bound to another outcome or payment",
-                ));
+    pub(crate) fn cap_cancel_payment(&self, id: i64, auth: &AuthContext) -> Result<()> {
+        let old = Payment::get(self, id)?;
+        if old.status == Status::Pending {
+            let next = PaymentWrite {
+                status: Status::Cancelled.into(),
+                ..Default::default()
             }
-            let mut result: Value = serde_json::from_str(text(&previous, "result_json")?)
-                .map_err(|_| invalid("Invalid recorded payment event"))?;
-            self.redact(self.cap_table("payments", "payment")?, &mut result);
-            return Ok(result);
-        }
-        let table = self.cap_table("payments", "payment")?;
-        let old = self.raw(table, &json!(id))?;
-        let current = text(&old, "status")?;
-        let changed = current != input.outcome;
-        if changed
-            && !matches!(
-                (current, input.outcome.as_str()),
-                ("pending", "succeeded" | "failed") | ("succeeded", "refunded")
-            )
-        {
-            return Err(state("Payment outcome conflicts with the current state"));
-        }
-        let payment = if changed {
-            let payment = self.cap_update(table, id, json!({"status":input.outcome}))?;
-            self.cap_audit(table, "payments.simulate", auth, Some(&old), &payment)?;
-            self.cap_publish(
-                Event::Payment {
-                    before: old,
-                    after: payment.clone(),
-                },
-                auth,
-                now,
-            )?;
-            payment
-        } else {
-            old
-        };
-        let payment = self.cap_response(table, payment)?;
-        self.cap_insert(events,json!({"payment_id":id,"event_key":input.event_id,"outcome":input.outcome,"result_json":payment.to_string(),"created_at":now.to_rfc3339()}))?;
-        crate::service::commit(tx)?;
-        Ok(payment)
-    }
-    pub(super) fn cap_cancel_payment(&self, id: i64, auth: &AuthContext) -> Result<()> {
-        let table = self.cap_table("payments", "payment")?;
-        let old = self.raw(table, &json!(id))?;
-        if old["status"] == "pending" {
-            let payment = self.cap_update(table, id, json!({"status":"cancelled"}))?;
-            self.cap_audit(table, "payments.cancel", auth, Some(&old), &payment)?;
+            .update(self, id)?;
+            next.audit(self, "payments.cancel", auth, Some(&old))?;
         }
         Ok(())
     }

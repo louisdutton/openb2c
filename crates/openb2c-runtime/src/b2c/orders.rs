@@ -1,4 +1,8 @@
 use super::*;
+use crate::records::{
+    OrdersItem as OrderItem, OrdersItemWrite, OrdersOrder as Order, OrdersOrderStatus as Status,
+    OrdersOrderWrite as OrderWrite, Record,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Serialize)]
@@ -16,6 +20,14 @@ struct CreateOrder {
 
 impl Service {
     pub fn b2c_create_order(&self, input: &Value, auth: &AuthContext) -> Result<Value> {
+        self.b2c_create_order_at(input, auth, Utc::now())
+    }
+    pub fn b2c_create_order_at(
+        &self,
+        input: &Value,
+        auth: &AuthContext,
+        now: DateTime<Utc>,
+    ) -> Result<Value> {
         self.cap_command("orders", "orders.create", auth)?;
         let user = self.cap_customer(auth)?;
         let mut input: CreateOrder = decode(input)?;
@@ -39,28 +51,22 @@ impl Service {
         {
             return Err(invalid("Duplicate price lines are not allowed"));
         }
+        // The persisted request fingerprint is a serialization boundary, not a business record.
         let fingerprint =
-            serde_json::to_string(&input.items).map_err(|_| invalid("Invalid items"))?;
+            serde_json::to_string(&input.items).map_err(|e| invalid(e.to_string()))?;
         let tx = crate::service::transaction(&self.db)?;
-        let table = self.cap_table("orders", "order")?;
-        let existing = self.query(
-            &format!(
-                "SELECT * FROM {} WHERE user_id=? AND request_key=?",
-                quote(table)
-            ),
-            &[
-                SqlValue::Integer(user),
-                SqlValue::Text(input.idempotency_key.clone()),
-            ],
-        )?;
-        if let Some(order) = existing.first() {
-            if order["request_json"] != fingerprint {
+        if let Some(order) = Order::first(
+            self,
+            "WHERE user_id=? AND request_key=?",
+            &[&user, &input.idempotency_key],
+        )? {
+            if order.request_json != fingerprint {
                 return Err(ServiceError::new(
                     "conflict",
                     "Idempotency key already used with different items",
                 ));
             }
-            return self.cap_order_view(order.clone());
+            return self.cap_order_view(order);
         }
         let mut amount = 0i64;
         let mut currency = None;
@@ -84,42 +90,57 @@ impl Service {
             currency = Some(price.currency.clone());
             lines.push((item, price));
         }
-        let order=self.cap_insert(table,json!({"user_id":user,"status":"pending","amount_minor":amount,"currency":currency,"request_key":input.idempotency_key,"request_json":fingerprint,"created_at":Utc::now().to_rfc3339()}))?;
-        for (item, price) in lines {
-            self.cap_insert(self.cap_table("orders","item")?,json!({"order_id":order["id"],"product_id":price.product_id,"price_id":price.id,"product_code":price.product_code,"name":price.name,"quantity":item.quantity,"unit_amount_minor":price.amount_minor}))?;
+        let order = OrderWrite {
+            user_id: user.into(),
+            status: Status::Pending.into(),
+            amount_minor: amount.into(),
+            currency: currency.expect("Validated nonempty order").into(),
+            request_key: input.idempotency_key.into(),
+            request_json: fingerprint.into(),
+            created_at: now.to_rfc3339().into(),
+            ..Default::default()
         }
-        self.cap_audit(table, "orders.create", auth, None, &order)?;
+        .insert(self)?;
+        for (item, price) in lines {
+            OrdersItemWrite {
+                order_id: order.id.into(),
+                product_id: price.product_id.into(),
+                price_id: price.id.into(),
+                product_code: price.product_code.into(),
+                name: price.name.into(),
+                quantity: item.quantity.into(),
+                unit_amount_minor: price.amount_minor.into(),
+                ..Default::default()
+            }
+            .insert(self)?;
+        }
+        order.audit(self, "orders.create", auth, None)?;
         let result = self.cap_order_view(order)?;
         crate::service::commit(tx)?;
         Ok(result)
     }
-    pub(super) fn cap_order_view(&self, order: Value) -> Result<Value> {
-        let items = self.query(
-            &format!(
-                "SELECT * FROM {} WHERE order_id=? ORDER BY id",
-                quote(self.cap_table("orders", "item")?)
-            ),
-            &[sql_value(&order["id"])?],
-        )?;
-        let order = self.cap_response(self.cap_table("orders", "order")?, order)?;
-        let items = items
-            .into_iter()
-            .map(|row| self.cap_response(self.cap_table("orders", "item")?, row))
+    pub(super) fn cap_order_view(&self, order: Order) -> Result<Value> {
+        let items = OrderItem::select(self, "WHERE order_id=? ORDER BY id", &[&order.id])?
+            .iter()
+            .map(|r| r.wire(self))
             .collect::<Result<Vec<_>>>()?;
-        Ok(json!({"order":order,"items":items}))
+        Ok(json!({"order":order.wire(self)?,"items":items}))
     }
     pub fn b2c_order(&self, id: i64, auth: &AuthContext) -> Result<Value> {
-        self.cap_order_view(self.cap_owned("orders", "order", id, "orders.read", auth)?)
+        self.cap_order_view(self.owned::<Order>(id, "orders", "orders.read", auth)?)
     }
     pub fn b2c_cancel_order(&self, id: i64, auth: &AuthContext) -> Result<Value> {
         let tx = crate::service::transaction(&self.db)?;
-        let old = self.cap_owned("orders", "order", id, "orders.cancel", auth)?;
-        if old["status"] != "pending" {
+        let old = self.owned::<Order>(id, "orders", "orders.cancel", auth)?;
+        if old.status != Status::Pending {
             return Err(state("Only pending orders can be cancelled"));
         }
-        let table = self.cap_table("orders", "order")?;
-        let order = self.cap_update(table, id, json!({"status":"cancelled"}))?;
-        self.cap_audit(table, "orders.cancel", auth, Some(&old), &order)?;
+        let order = OrderWrite {
+            status: Status::Cancelled.into(),
+            ..Default::default()
+        }
+        .update(self, id)?;
+        order.audit(self, "orders.cancel", auth, Some(&old))?;
         self.cap_publish(
             Event::Order {
                 before: old,

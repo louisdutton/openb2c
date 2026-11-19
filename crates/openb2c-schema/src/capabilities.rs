@@ -18,10 +18,18 @@ pub struct Capability {
 
 pub fn dependencies(name: &str) -> Option<&'static [&'static str]> {
     Some(match name {
-        "customers" | "catalog" => &[],
+        "accounting" | "documents" => &[],
+        "billing" | "banking" | "tax" => &["accounting"],
+        "purchasing" => &["accounting", "documents"],
+        "billing_orders" => &["billing", "orders", "order_payments"],
+        "billing_payments" => &["billing", "payments"],
+        "billing_subscriptions" => &["billing", "subscriptions"],
+        "accounts" | "catalog" => &[],
+        "customers" => &["accounts"],
         "orders" => &["customers", "catalog"],
         "payments" | "entitlements" => &["customers"],
-        "password_auth" => &["customers"],
+        "downloads" => &["entitlements"],
+        "password_auth" => &["accounts"],
         "subscriptions" => &["customers", "catalog", "payments"],
         "order_payments" => &["orders", "payments"],
         "order_entitlements" => &["orders", "entitlements"],
@@ -39,12 +47,12 @@ pub fn entity<'a>(schema: &'a Schema, capability: &str, role: &str) -> Option<&'
         .map(String::as_str)
 }
 
-struct EntityContract {
-    role: &'static str,
-    fields: Vec<(&'static str, SqlType)>,
-    nullable: &'static [&'static str],
-    read_scope: Option<&'static str>,
-    managed: bool,
+pub(crate) struct EntityContract {
+    pub(crate) role: &'static str,
+    pub(crate) fields: Vec<(&'static str, SqlType)>,
+    pub(crate) nullable: &'static [&'static str],
+    pub(crate) read_scope: Option<&'static str>,
+    pub(crate) managed: bool,
 }
 fn contracts(name: &str) -> Vec<EntityContract> {
     use SqlType::{Integer as I, Text as T};
@@ -56,6 +64,23 @@ fn contracts(name: &str) -> Vec<EntityContract> {
         managed,
     };
     match name {
+        "downloads" => vec![contract(
+            "file",
+            vec![
+                ("id", I),
+                ("source_key", T),
+                ("name", T),
+                ("media_type", T),
+                ("content_base64", T),
+                ("sha256", T),
+                ("size_bytes", I),
+                ("resources_json", T),
+                ("status", T),
+            ],
+            &[],
+            None,
+            true,
+        )],
         "password_auth" => vec![
             contract(
                 "credential",
@@ -90,13 +115,27 @@ fn contracts(name: &str) -> Vec<EntityContract> {
                 true,
             ),
         ],
-        "customers" => vec![
+        "customers" => vec![contract(
+            "customer",
+            vec![("id", I), ("user_id", I)],
+            &[],
+            None,
+            true,
+        )],
+        "accounts" => vec![
             contract(
-                "customer",
+                "staff",
+                vec![("id", I), ("user_id", I), ("scopes", T), ("active", I)],
+                &[],
+                None,
+                true,
+            ),
+            contract(
+                "account",
                 vec![("id", I), ("email", T), ("name", T)],
                 &[],
                 None,
-                false,
+                true,
             ),
             contract(
                 "credential",
@@ -183,6 +222,11 @@ fn contracts(name: &str) -> Vec<EntityContract> {
                     ("status", T),
                     ("request_key", T),
                     ("created_at", T),
+                    ("bank_reference", T),
+                    ("bank_account", T),
+                    ("beneficiary", T),
+                    ("sort_code", T),
+                    ("account_number", T),
                 ],
                 &[],
                 Some("payments.read"),
@@ -199,6 +243,59 @@ fn contracts(name: &str) -> Vec<EntityContract> {
                     ("created_at", T),
                 ],
                 &[],
+                None,
+                true,
+            ),
+            contract(
+                "transaction",
+                vec![
+                    ("id", I),
+                    ("source", T),
+                    ("account", T),
+                    ("transaction_id", T),
+                    ("amount_minor", I),
+                    ("currency", T),
+                    ("direction", T),
+                    ("status", T),
+                    ("reference", T),
+                    ("settled_at", T),
+                    ("received_at", T),
+                    ("updated_at", T),
+                    ("review_reason", T),
+                    ("bank_source", T),
+                    ("source_reference", T),
+                    ("narrative", T),
+                    ("disposition", T),
+                    ("resolution_note", T),
+                ],
+                &["settled_at", "review_reason", "resolution_note"],
+                None,
+                true,
+            ),
+            contract(
+                "allocation",
+                vec![
+                    ("id", I),
+                    ("transaction_id", I),
+                    ("payment_id", I),
+                    ("amount_minor", I),
+                    ("kind", T),
+                    ("created_at", T),
+                ],
+                &[],
+                None,
+                true,
+            ),
+            contract(
+                "sync",
+                vec![
+                    ("id", I),
+                    ("changes_since", T),
+                    ("next_poll_at", T),
+                    ("requested", I),
+                    ("last_error", T),
+                ],
+                &["last_error"],
                 None,
                 true,
             ),
@@ -269,11 +366,11 @@ fn contracts(name: &str) -> Vec<EntityContract> {
             None,
             true,
         )],
-        _ => Vec::new(),
+        _ => crate::backoffice::contracts(name),
     }
 }
 
-fn unique(schema: &Schema, table: &str, fields: &[&str]) -> bool {
+pub(crate) fn unique(schema: &Schema, table: &str, fields: &[&str]) -> bool {
     (fields.len() == 1
         && schema
             .tables
@@ -302,7 +399,13 @@ pub fn validate(schema: &Schema) -> Vec<String> {
             errors.push(format!("{path}: unknown capability"));
             continue;
         };
-        if capability.version != 1 {
+        if capability.version
+            != if ["customers", "password_auth", "billing", "payments"].contains(&name.as_str()) {
+                2
+            } else {
+                1
+            }
+        {
             errors.push(format!(
                 "{path}: unsupported contract version {}",
                 capability.version
@@ -322,9 +425,18 @@ pub fn validate(schema: &Schema) -> Vec<String> {
                 errors.push(format!("{path}: missing dependency {dependency}"));
             }
         }
-        if name == "payments" && capability.settings != json!({"provider":"fake"}) {
-            errors.push(format!("{path}.settings: this implementation supports only provider = fake; no live payments"));
-        } else if name != "payments"
+        if name == "payments"
+            && ![
+                json!({"provider":"bank_transfer","feed":"simulated"}),
+                json!({"provider":"bank_transfer","feed":"starling"}),
+                json!({"provider":"bank_transfer","feed":"open_banking","reference_field":"none"}),
+                json!({"provider":"bank_transfer","feed":"open_banking","reference_field":"transaction_information"}),
+                json!({"provider":"bank_transfer","feed":"open_banking","reference_field":"transaction_reference"}),
+            ]
+            .contains(&capability.settings)
+        {
+            errors.push(format!("{path}.settings: expected provider = bank_transfer with simulated, starling, or open_banking feed and a valid compiled reference field"));
+        } else if !["payments", "billing", "tax"].contains(&name.as_str())
             && !capability.settings.is_null()
             && capability.settings != json!({})
         {
@@ -430,6 +542,17 @@ pub fn validate(schema: &Schema) -> Vec<String> {
             }
         }
     }
+    errors.extend(crate::backoffice::validate(schema));
+    if let Some(table) = entity(schema, "downloads", "file")
+        && schema
+            .tables
+            .get(table)
+            .and_then(|t| t.get("content_base64"))
+            .is_some_and(|c| c.metadata["privacy"] != "secret")
+    {
+        errors
+            .push("capabilities.downloads: file content must have secret privacy metadata".into());
+    }
     let mut fk = |cap: &str, role: &str, field: &str, target_cap: &str, target_role: &str| {
         if let (Some(table), Some(target)) = (
             entity(schema, cap, role),
@@ -451,13 +574,29 @@ pub fn validate(schema: &Schema) -> Vec<String> {
         ("payments", "payment"),
         ("subscriptions", "subscription"),
         ("entitlements", "entitlement"),
-        ("customers", "credential"),
+        ("accounts", "credential"),
+        ("accounts", "staff"),
+        ("customers", "customer"),
         ("password_auth", "credential"),
         ("password_auth", "session"),
     ] {
-        fk(cap, role, "user_id", "customers", "customer");
+        fk(cap, role, "user_id", "accounts", "account");
     }
     for (cap, role, field, target, target_role) in [
+        (
+            "payments",
+            "allocation",
+            "transaction_id",
+            "payments",
+            "transaction",
+        ),
+        (
+            "payments",
+            "allocation",
+            "payment_id",
+            "payments",
+            "payment",
+        ),
         ("catalog", "price", "product_id", "catalog", "product"),
         ("orders", "item", "order_id", "orders", "order"),
         ("orders", "item", "price_id", "catalog", "price"),
@@ -497,12 +636,24 @@ pub fn validate(schema: &Schema) -> Vec<String> {
     }
     for (cap, role, fields) in [
         ("catalog", "product", vec!["code"]),
+        ("customers", "customer", vec!["user_id"]),
+        ("accounts", "staff", vec!["user_id"]),
         ("password_auth", "credential", vec!["user_id"]),
         ("password_auth", "session", vec!["token_hash"]),
         ("orders", "order", vec!["user_id", "request_key"]),
         ("payments", "payment", vec!["user_id", "request_key"]),
         ("payments", "payment", vec!["reference"]),
         ("payments", "event", vec!["event_key"]),
+        (
+            "payments",
+            "transaction",
+            vec!["source", "account", "transaction_id"],
+        ),
+        (
+            "payments",
+            "allocation",
+            vec!["transaction_id", "payment_id"],
+        ),
         (
             "subscriptions",
             "subscription",
@@ -522,6 +673,7 @@ pub fn validate(schema: &Schema) -> Vec<String> {
         ("order_payments", "link", vec!["payment_id"]),
         ("order_payments", "link", vec!["order_id", "request_key"]),
         ("entitlements", "entitlement", vec!["source_key"]),
+        ("downloads", "file", vec!["source_key"]),
     ] {
         if let Some(table) = entity(schema, cap, role)
             && !unique(schema, table, &fields)
@@ -533,6 +685,12 @@ pub fn validate(schema: &Schema) -> Vec<String> {
         }
     }
     for (cap, role, field, values) in [
+        (
+            "downloads",
+            "file",
+            "status",
+            vec!["published", "withdrawn"],
+        ),
         (
             "catalog",
             "price",
@@ -551,7 +709,32 @@ pub fn validate(schema: &Schema) -> Vec<String> {
             "status",
             vec!["pending", "succeeded", "failed", "cancelled", "refunded"],
         ),
-        ("payments", "payment", "provider", vec!["fake"]),
+        (
+            "payments",
+            "payment",
+            "provider",
+            vec!["bank_transfer", "fake"],
+        ),
+        (
+            "payments",
+            "transaction",
+            "source",
+            vec!["simulated", "starling", "open_banking"],
+        ),
+        ("payments", "transaction", "direction", vec!["in", "out"]),
+        (
+            "payments",
+            "transaction",
+            "status",
+            vec!["pending", "settled", "reversed"],
+        ),
+        (
+            "payments",
+            "transaction",
+            "disposition",
+            vec!["open", "excluded"],
+        ),
+        ("payments", "allocation", "kind", vec!["receipt", "refund"]),
         (
             "payments",
             "event",
@@ -592,20 +775,20 @@ pub fn validate(schema: &Schema) -> Vec<String> {
                 })
         {
             errors.push(format!(
-                "capabilities.{cap}: {table}.{field} does not match the version 1 state contract"
+                "capabilities.{cap}: {table}.{field} does not match the declared state contract"
             ));
         }
     }
-    if let Some(customer) = entity(schema, "customers", "customer")
+    if let Some(customer) = entity(schema, "accounts", "account")
         && customer != "user"
     {
-        errors.push("capabilities.customers: the platform identity contract requires user".into());
+        errors.push("capabilities.accounts: the platform identity contract requires user".into());
     }
-    if let Some(credential) = entity(schema, "customers", "credential")
+    if let Some(credential) = entity(schema, "accounts", "credential")
         && credential != "api_key"
     {
         errors.push(
-            "capabilities.customers: the platform credential contract requires api_key".into(),
+            "capabilities.accounts: the platform credential contract requires api_key".into(),
         );
     }
     errors
@@ -639,9 +822,58 @@ pub fn endpoints(schema: &Schema) -> Vec<Endpoint> {
         }
     };
     add("catalog", "get", "/b2c/catalog", None, false, None);
+    add(
+        "downloads",
+        "get",
+        "/b2c/downloads/manage",
+        Some("downloads.publish"),
+        false,
+        None,
+    );
+    add(
+        "downloads",
+        "get",
+        "/b2c/downloads",
+        Some("downloads.read"),
+        true,
+        None,
+    );
+    add(
+        "downloads",
+        "get",
+        "/b2c/downloads/{id}/content",
+        Some("downloads.read"),
+        true,
+        None,
+    );
+    add(
+        "downloads",
+        "post",
+        "/b2c/downloads",
+        Some("downloads.publish"),
+        false,
+        Some(object(
+            json!({"idempotency_key":key,"name":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9_ -][A-Za-z0-9._ -]*$"},"media_type":{"type":"string","maxLength":100},"content_base64":{"type":"string","contentEncoding":"base64","maxLength":11184812},"resources":{"type":"array","minItems":1,"maxItems":20,"items":key}}),
+            &[
+                "idempotency_key",
+                "name",
+                "media_type",
+                "content_base64",
+                "resources",
+            ],
+        )),
+    );
+    add(
+        "downloads",
+        "post",
+        "/b2c/downloads/{id}/withdraw",
+        Some("downloads.publish"),
+        false,
+        Some(object(json!({}), &[])),
+    );
     let password = json!({"type":"string","minLength":15,"maxLength":128,"writeOnly":true});
     add(
-        "password_auth",
+        "customers",
         "post",
         "/auth/signup",
         None,
@@ -731,7 +963,7 @@ pub fn endpoints(schema: &Schema) -> Vec<Endpoint> {
         "payments",
         "get",
         "/b2c/payments/pending",
-        Some("payments.simulate"),
+        Some("payments.reconcile"),
         false,
         None,
     );
@@ -746,14 +978,74 @@ pub fn endpoints(schema: &Schema) -> Vec<Endpoint> {
     add(
         "payments",
         "post",
-        "/b2c/payments/{id}/simulate",
-        Some("payments.simulate"),
+        "/backoffice/transfers",
+        Some("payments.import"),
         false,
         Some(object(
-            json!({"event_id":key,"outcome":{"type":"string","enum":["succeeded","failed","refunded"]}}),
-            &["event_id", "outcome"],
+            json!({"transaction_id":{"type":"string","minLength":1,"maxLength":210},"account":{"type":"string"},"amount_minor":{"type":"integer","minimum":1},"currency":{"type":"string","const":"GBP"},"direction":{"enum":["in","out"]},"status":{"enum":["pending","settled","reversed"]},"reference":{"type":"string","maxLength":500},"bank_source":{"type":"string","maxLength":100},"source_reference":{"type":"string","maxLength":210},"narrative":{"type":"string","maxLength":2000},"settled_at":{"type":["string","null"],"format":"date-time"},"updated_at":{"type":"string","format":"date-time"}}),
+            &[
+                "transaction_id",
+                "account",
+                "amount_minor",
+                "currency",
+                "direction",
+                "status",
+                "updated_at",
+            ],
         )),
     );
+    add(
+        "payments",
+        "get",
+        "/backoffice/transfers",
+        Some("payments.reconcile"),
+        false,
+        None,
+    );
+    add(
+        "payments",
+        "post",
+        "/backoffice/transfers/{id}/reconcile",
+        Some("payments.reconcile"),
+        false,
+        Some(object(json!({}), &[])),
+    );
+    add(
+        "payments",
+        "post",
+        "/backoffice/transfers/{id}/allocate",
+        Some("payments.reconcile"),
+        false,
+        Some(object(
+            json!({"payment_id":id,"amount_minor":{"type":"integer","minimum":1}}),
+            &["payment_id", "amount_minor"],
+        )),
+    );
+    add(
+        "payments",
+        "post",
+        "/backoffice/transfers/sync",
+        Some("payments.import"),
+        false,
+        Some(object(
+            json!({"changes_since":{"type":"string","format":"date-time"}}),
+            &["changes_since"],
+        )),
+    );
+    if schema
+        .capabilities
+        .get("payments")
+        .is_some_and(|c| c.settings["feed"] == "starling")
+    {
+        add(
+            "payments",
+            "post",
+            "/backoffice/transfers/feed-item",
+            None,
+            false,
+            None,
+        );
+    }
     add(
         "subscriptions",
         "post",
@@ -783,14 +1075,6 @@ pub fn endpoints(schema: &Schema) -> Vec<Endpoint> {
             json!({"at_period_end":{"type":"boolean","default":true}}),
             &[],
         )),
-    );
-    add(
-        "subscriptions",
-        "post",
-        "/b2c/subscriptions/{id}/retry",
-        Some("subscriptions.retry"),
-        true,
-        Some(object(json!({"idempotency_key":key}), &["idempotency_key"])),
     );
     add(
         "subscriptions",
@@ -827,6 +1111,18 @@ pub fn endpoints(schema: &Schema) -> Vec<Endpoint> {
         false,
         Some(object(json!({}), &[])),
     );
+    result.extend(crate::backoffice::endpoints(schema));
+    if schema.capabilities.contains_key("payments") {
+        result.push(Endpoint{capability:"payments",method:"post",path:"/backoffice/transfers/{id}/review",scope:Some("payments.reconcile"),customer:false,input:Some(object(json!({"exclude":{"type":"boolean"},"reason":{"type":"string","minLength":15,"maxLength":500}}),&["exclude","reason"]))});
+    }
+    let bank_feed = schema
+        .capabilities
+        .get("payments")
+        .is_some_and(|c| c.settings["feed"] == "starling" || c.settings["feed"] == "open_banking");
+    result.retain(|e| {
+        !(bank_feed && e.path == "/backoffice/transfers" && e.method == "post"
+            || !bank_feed && e.path == "/backoffice/transfers/sync")
+    });
     result
 }
 
@@ -842,6 +1138,37 @@ pub fn customer_scopes(schema: &Schema) -> Vec<String> {
 
 pub fn add_openapi(schema: &Schema, doc: &mut Value) {
     doc["x-openb2c-capabilities"] = json!(schema.capabilities);
+    if let Some(table) = entity(schema, "payments", "payment") {
+        let mut request = doc["components"]["schemas"][crate::contract::pascal(table)].clone();
+        request["properties"]["instructions"] = object(
+            json!({"method":{"const":"bank_transfer"},"account_name":{"type":"string"},"sort_code":{"type":"string"},"account_number":{"type":"string"},"reference":{"type":"string"},"amount_minor":{"type":"integer"},"currency":{"const":"GBP"},"simulated":{"type":"boolean"},"qr_payload":{"type":"string","description":"Readable transfer instructions, not a banking-app payment URI"},"qr_svg":{"type":"string"}}),
+            &[
+                "method",
+                "account_name",
+                "sort_code",
+                "account_number",
+                "reference",
+                "amount_minor",
+                "currency",
+                "simulated",
+                "qr_payload",
+                "qr_svg",
+            ],
+        );
+        doc["components"]["schemas"]["OpenB2CPaymentRequest"] = request;
+        let table = entity(schema, "payments", "transaction").unwrap();
+        let mut transfer = doc["components"]["schemas"][crate::contract::pascal(table)].clone();
+        transfer["properties"]["unallocated_minor"] = json!({"type":"integer","minimum":0});
+        transfer["properties"]["allocations"] = json!({"type":"array","items":{"$ref":format!("#/components/schemas/{}",crate::contract::pascal(entity(schema,"payments","allocation").unwrap()))}});
+        doc["components"]["schemas"]["OpenB2CBankTransfer"] = transfer;
+        if schema
+            .capabilities
+            .get("payments")
+            .is_some_and(|c| c.settings["feed"] == "starling")
+        {
+            doc["components"]["securitySchemes"]["starlingSignature"] = json!({"type":"apiKey","in":"header","name":"X-Hook-Signature","description":"Base64 RSA PKCS#1 v1.5 SHA-512 signature over the raw request body"});
+        }
+    }
     for endpoint in endpoints(schema) {
         let mut entry = json!({"tags":[endpoint.capability],"operationId":endpoint.path.trim_matches('/').replace(['/', '{', '}', '-'], "_"),"x-openb2c-scope":endpoint.scope,"responses":{"200":{"description":"Successful capability operation","content":{"application/json":{"schema":response_schema(schema, &endpoint)}}}}});
         if endpoint.path == "/auth/signup" {
@@ -852,7 +1179,14 @@ pub fn add_openapi(schema: &Schema, doc: &mut Value) {
                 .unwrap();
             entry["responses"]["201"] = response;
         }
-        if endpoint.capability == "password_auth" {
+        if endpoint.path == "/b2c/downloads/{id}/content" {
+            entry["responses"]["200"]["content"] =
+                json!({"application/octet-stream":{"schema":{"type":"string","format":"binary"}}});
+            entry["responses"]["200"]["description"] = json!(
+                "File bytes with the stored media type, attachment filename, SHA-256 ETag and Cache-Control: private, no-store"
+            );
+        }
+        if endpoint.capability == "password_auth" || endpoint.path == "/auth/signup" {
             entry["responses"]["429"] = json!({"description":"Authentication rate limit exceeded"});
         }
         entry["operationId"] = json!(format!(
@@ -872,6 +1206,9 @@ pub fn add_openapi(schema: &Schema, doc: &mut Value) {
         if endpoint.scope.is_some() {
             entry["security"] = json!([{"bearerAuth":[]}]);
         }
+        if endpoint.path.ends_with("/feed-item") {
+            entry["security"] = json!([{"starlingSignature":[]}]);
+        }
         if endpoint.path.contains("{id}") {
             entry["parameters"] = json!([{"name":"id","in":"path","required":true,"schema":{"type":"integer","minimum":1}}]);
         }
@@ -886,13 +1223,52 @@ pub fn add_openapi(schema: &Schema, doc: &mut Value) {
 }
 
 fn response_schema(schema: &Schema, endpoint: &Endpoint) -> Value {
-    let reference = |cap, role| json!({"$ref":format!("#/components/schemas/{}",crate::contract::pascal(entity(schema,cap,role).unwrap()))});
+    let reference = |cap, role| json!({"$ref":format!("#/components/schemas/{}",if cap=="payments" && role=="payment"{"OpenB2CPaymentRequest".to_owned()}else{crate::contract::pascal(entity(schema,cap,role).unwrap())})});
     let array = |items| json!({"type":"array","items":items});
     match endpoint.capability {
+        "payments" if endpoint.path.ends_with("/feed-item") => {
+            object(json!({"accepted":{"type":"boolean"}}), &["accepted"])
+        }
+        "payments" if endpoint.path.starts_with("/backoffice/transfers") => {
+            let transfer = json!({"$ref":"#/components/schemas/OpenB2CBankTransfer"});
+            if endpoint.method == "get" || endpoint.path.ends_with("/sync") {
+                let mut properties = json!({"items":array(transfer)});
+                if endpoint.method == "get" {
+                    properties["sync"] =
+                        json!({"anyOf":[reference("payments","sync"),{"type":"null"}]});
+                    properties["unresolved_count"] = json!({"type":"integer","minimum":0});
+                }
+                if endpoint.path.ends_with("/sync") {
+                    properties["changes_since"] = json!({"type":"string","format":"date-time"});
+                }
+                object(properties, &["items"])
+            } else {
+                transfer
+            }
+        }
+        "downloads" => {
+            let file = object(
+                json!({"id":{"type":"integer"},"name":{"type":"string"},"media_type":{"type":"string"},"sha256":{"type":"string"},"size_bytes":{"type":"integer"},"resources":{"type":"array","items":{"type":"string"}},"status":{"type":"string","enum":["published","withdrawn"]}}),
+                &[
+                    "id",
+                    "name",
+                    "media_type",
+                    "sha256",
+                    "size_bytes",
+                    "resources",
+                    "status",
+                ],
+            );
+            if endpoint.method == "get" && !endpoint.path.ends_with("/content") {
+                object(json!({"items":array(file)}), &["items"])
+            } else {
+                file
+            }
+        }
         "password_auth" if endpoint.path == "/auth/logout" => {
             object(json!({"revoked":{"type":"boolean"}}), &["revoked"])
         }
-        "password_auth" => object(
+        "password_auth" | "customers" => object(
             json!({"access_token":{"type":"string"},"token_type":{"type":"string","const":"Bearer"},"expires_in":{"type":"integer","const":3600},"expires_at":{"type":"string","format":"date-time"},"user":{"type":"object","properties":{"id":{"type":"integer"},"email":{"type":"string"},"name":{"type":"string"}},"required":["id","email","name"]}}),
             &[
                 "access_token",
@@ -920,7 +1296,7 @@ fn response_schema(schema: &Schema, endpoint: &Endpoint) -> Value {
             &["payments", "cancelled"],
         ),
         "subscriptions" => object(
-            json!({"subscription":reference("subscriptions","subscription"),"payment":{"anyOf":[reference("payments","payment"),{"type":"null"}]}}),
+            json!({"subscription":reference("subscriptions","subscription"),"payment":{"anyOf":[reference("payments","payment"),{"type":"null"}]},"standing_order_notice":{"type":"string"}}),
             &["subscription", "payment"],
         ),
         "entitlements" if endpoint.method == "get" => object(
@@ -928,6 +1304,6 @@ fn response_schema(schema: &Schema, endpoint: &Endpoint) -> Value {
             &["items"],
         ),
         "entitlements" => reference("entitlements", "entitlement"),
-        _ => json!({"type":"object"}),
+        _ => crate::backoffice::response_schema(schema, endpoint),
     }
 }

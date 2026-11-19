@@ -1,10 +1,12 @@
 //! The evaluated Nix composition is the sole application model.
+pub mod backoffice;
 pub mod capabilities;
 pub mod contract;
 pub mod inference;
 pub mod migration;
 pub mod sql;
 pub mod validate;
+pub mod workflows;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -24,6 +26,8 @@ pub struct Schema {
     pub derived: BTreeMap<String, BTreeMap<String, DerivedField>>,
     pub seed: Seed,
     pub capabilities: BTreeMap<String, capabilities::Capability>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub workflows: BTreeMap<String, workflows::Workflow>,
     // Preserve capability metadata verbatim so no second schema is introduced.
     #[serde(flatten)]
     pub metadata: BTreeMap<String, Value>,

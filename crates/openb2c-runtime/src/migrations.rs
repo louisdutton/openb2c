@@ -38,17 +38,67 @@ fn apply(db: &Connection, id: &str, source: &str, description: &str) -> Result<V
         );
         return Ok(json!({"id":id,"checksum":hash,"description":description,"status":"verified"}));
     }
-    let tx = db.unchecked_transaction()?;
-    db.execute_batch(source)
-        .with_context(|| format!("Applying migration {id}"))?;
+    let tx = crate::service::transaction(db)?;
+    use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+    db.authorizer(Some(|context: AuthContext<'_>| match context.action {
+        AuthAction::Transaction { .. }
+        | AuthAction::Savepoint { .. }
+        | AuthAction::Attach { .. }
+        | AuthAction::Detach { .. } => Authorization::Deny,
+        AuthAction::Pragma {
+            pragma_name,
+            pragma_value: Some(value),
+        } if pragma_name.eq_ignore_ascii_case("foreign_keys")
+            && (value.eq_ignore_ascii_case("on") || value == "1") =>
+        {
+            Authorization::Allow
+        }
+        AuthAction::Pragma {
+            pragma_name,
+            pragma_value: Some(_),
+        } if [
+            "writable_schema",
+            "journal_mode",
+            "locking_mode",
+            "foreign_keys",
+            "ignore_check_constraints",
+        ]
+        .iter()
+        .any(|name| pragma_name.eq_ignore_ascii_case(name)) =>
+        {
+            Authorization::Deny
+        }
+        AuthAction::Insert { table_name }
+        | AuthAction::Update { table_name, .. }
+        | AuthAction::Delete { table_name }
+        | AuthAction::DropTable { table_name }
+            if [
+                "openb2c_schema_model",
+                "openb2c_migration",
+                "openb2c_capability_approval",
+                "openb2c_application_revision",
+            ]
+            .contains(&table_name) =>
+        {
+            Authorization::Deny
+        }
+        _ => Authorization::Allow,
+    }));
+    let result = db.execute_batch(source);
+    db.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
+    result.with_context(|| format!("Applying migration {id}; transaction control and runtime metadata changes are prohibited"))?;
     record(db, id, &hash, description)?;
-    tx.commit()?;
+    tx.finish()?;
     Ok(json!({"id":id,"checksum":hash,"description":description,"status":"applied"}))
 }
 pub fn run(db: &Connection, schema: &Schema, dir: Option<&Path>) -> Result<Vec<Value>> {
+    let outer = crate::service::transaction(db)?;
+    crate::transitions::check(db, schema, dir)?;
+    let roles = crate::transitions::snapshot_roles(db)?;
     db.execute_batch("CREATE TABLE IF NOT EXISTS openb2c_migration(id TEXT PRIMARY KEY,checksum TEXT NOT NULL,description TEXT NOT NULL,applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
-        CREATE TABLE IF NOT EXISTS openb2c_schema_model(id INTEGER PRIMARY KEY CHECK(id=1), model_json TEXT NOT NULL);")?;
-    let user_schema:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('openb2c_migration','openb2c_schema_model'))",[],|r|r.get(0))?;
+        CREATE TABLE IF NOT EXISTS openb2c_schema_model(id INTEGER PRIMARY KEY CHECK(id=1), model_json TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS openb2c_application_revision(id INTEGER PRIMARY KEY CHECK(id=1), sha256 TEXT NOT NULL);")?;
+    let user_schema:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('openb2c_migration','openb2c_schema_model','openb2c_application_revision'))",[],|r|r.get(0))?;
     let mut files = Vec::new();
     if let Some(dir) = dir.filter(|p| p.exists()) {
         for entry in fs::read_dir(dir)? {
@@ -115,7 +165,7 @@ pub fn run(db: &Connection, schema: &Schema, dir: Option<&Path>) -> Result<Vec<V
             }
         }
     }
-    let tx = db.unchecked_transaction()?;
+    let tx = crate::service::transaction(db)?;
     for (table, cols) in &schema.tables {
         let mut stmt = db.prepare(&format!("PRAGMA table_info({})", sql::quote(table)))?;
         let existing = stmt
@@ -153,7 +203,10 @@ pub fn run(db: &Connection, schema: &Schema, dir: Option<&Path>) -> Result<Vec<V
             }
         }
     }
+    #[cfg(feature = "reference")]
     let source = sql::generate(schema)?;
+    #[cfg(not(feature = "reference"))]
+    let source = crate::composition::SCHEMA_SQL;
     let hash = checksum(&source);
     let id = format!("schema:{hash}");
     if history(db, &id)?.is_none() {
@@ -225,6 +278,7 @@ pub fn run(db: &Connection, schema: &Schema, dir: Option<&Path>) -> Result<Vec<V
             "{table}: unique constraints differ; apply a numbered migration"
         );
     }
+    crate::transitions::verify_roles(db, schema, &roles)?;
     let mut statement = expected
         .prepare("SELECT name,sql FROM sqlite_master WHERE type='index' AND sql IS NOT NULL")?;
     let indexes = statement
@@ -253,7 +307,9 @@ pub fn run(db: &Connection, schema: &Schema, dir: Option<&Path>) -> Result<Vec<V
         }
     }
     db.execute("INSERT INTO openb2c_schema_model(id,model_json) VALUES (1,?) ON CONFLICT(id) DO UPDATE SET model_json=excluded.model_json",[serde_json::to_string(schema)?])?;
-    tx.commit()?;
+    db.execute("INSERT INTO openb2c_application_revision(id,sha256) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET sha256=excluded.sha256",[crate::transitions::model_hash(schema)])?;
+    tx.finish()?;
+    outer.finish()?;
     diagnostics.push(json!({"id":id,"checksum":hash,"status":"verified"}));
     Ok(diagnostics)
 }

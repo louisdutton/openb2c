@@ -34,7 +34,7 @@ in {
     channel = "nixpkgs";
   };
   languages.nix.enable = true;
-  packages = [pkgs.sqlite pkgs.cloudflared pkgs.jq];
+  packages = [pkgs.sqlite pkgs.cloudflared pkgs.jq pkgs.python3 pkgs.openssl];
   env = {
     NIX_PATH = "nixpkgs=${pkgs.path}";
     DB_PATH = lib.mkDefault "${config.git.root}/publisher.sqlite";

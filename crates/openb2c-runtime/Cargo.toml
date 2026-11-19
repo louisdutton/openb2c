@@ -4,6 +4,27 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+# Reference execution supports the existing in-process differential tests.
+# Exported services disable this feature and execute generated composition.
+default = ["reference"]
+reference = []
+cap_catalog = []
+cap_downloads = []
+cap_entitlements = []
+cap_order_payments = ["cap_orders", "cap_payments"]
+cap_orders = ["cap_catalog"]
+cap_payments = ["dep:qrcode"]
+cap_starling = ["cap_payments", "dep:rsa"]
+cap_open_banking = ["cap_payments"]
+cap_subscriptions = ["cap_catalog", "cap_payments"]
+cap_accounting = []
+cap_billing = ["cap_accounting"]
+cap_documents = []
+cap_purchasing = ["cap_documents", "cap_accounting"]
+cap_banking = ["cap_accounting"]
+cap_tax = ["cap_accounting"]
+
 [dependencies]
 anyhow.workspace = true
 serde.workspace = true
@@ -11,7 +32,7 @@ serde_json.workspace = true
 openb2c-schema.workspace = true
 axum = "0.8"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "time", "sync"] }
-rusqlite = { version = "0.37", features = ["bundled"] }
+rusqlite = { version = "0.37", features = ["bundled", "hooks"] }
 sha2 = "0.10"
 regex = "1"
 bcrypt = "0.17"
@@ -24,6 +45,8 @@ hmac = "0.12"
 base64 = "0.22"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde_urlencoded = "0.7"
+rsa = { version = "0.9", features = ["sha2"], optional = true }
+qrcode = { version = "0.14", default-features = false, features = ["svg"], optional = true }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

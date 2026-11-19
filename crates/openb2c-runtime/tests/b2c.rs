@@ -51,8 +51,12 @@ fn schema(selection: &str) -> Schema {
 fn service(selection: &str) -> Service {
     let service = Service::open(schema(selection), ":memory:", false).unwrap();
     if service.schema.capabilities.contains_key("customers") {
-        service.ensure_user("alice@example.test").unwrap();
-        service.ensure_user("bob@example.test").unwrap();
+        service
+            .ensure_customer("alice@example.test", &AuthContext::system())
+            .unwrap();
+        service
+            .ensure_customer("bob@example.test", &AuthContext::system())
+            .unwrap();
     }
     service
 }
@@ -124,7 +128,7 @@ fn capability_dependencies_and_managed_write_contracts_fail_early() {
     for (mutation, message) in [
         ("missing", "missing dependency"),
         ("version", "unsupported contract version"),
-        ("provider", "only provider = fake"),
+        ("provider", "provider = bank_transfer"),
         ("write", "must be disabled"),
         ("unique", "database uniqueness"),
     ] {
@@ -170,12 +174,12 @@ fn capability_dependencies_and_managed_write_contracts_fail_early() {
 #[test]
 fn capabilities_work_in_partial_compositions_without_unrelated_tables_or_routes() {
     for (selection, tables) in [
-        ("customers", 2),
-        ("catalog", 2),
-        ("orders", 6),
-        ("payments", 4),
-        ("subscriptions", 8),
-        ("entitlements", 3),
+        ("customers", 7),
+        ("catalog", 8),
+        ("orders", 11),
+        ("payments", 12),
+        ("subscriptions", 16),
+        ("entitlements", 8),
     ] {
         let service = service(selection);
         assert_eq!(service.schema.tables.len(), tables, "{selection}");
@@ -884,7 +888,9 @@ fn capability_responses_preserve_extension_defaults_redaction_and_derived_fields
     model.tables.get_mut("payment").unwrap().insert("operator_note".into(),serde_json::from_value(json!({"type":"text","default":"'internal-only'","metadata":{"privacy":"secret","redact":true}})).unwrap());
     model.derived.entry("purchase_order".into()).or_default().insert("total_label".into(),serde_json::from_value(json!({"type":"text","template":"{currency} {amount_minor}","dependencies":[{"table":"purchase_order","field":"currency"},{"table":"purchase_order","field":"amount_minor"}]})).unwrap());
     let service = Service::open(model, ":memory:", false).unwrap();
-    service.ensure_user("alice@example.test").unwrap();
+    service
+        .ensure_customer("alice@example.test", &AuthContext::system())
+        .unwrap();
     let auth = customer(&service, 1);
     let order = make_order(&service, &auth, "extension");
     assert_eq!(order["order"]["total_label"], "GBP 3000");
@@ -941,7 +947,8 @@ fn concurrent_requests_and_settlement_are_idempotent_on_separate_connections() {
     let db = temp.0.join("app.sqlite");
     let model = schema("full");
     let a = Service::open(model.clone(), &db, false).unwrap();
-    a.ensure_user("alice@example.test").unwrap();
+    a.ensure_customer("alice@example.test", &AuthContext::system())
+        .unwrap();
     let auth = customer(&a, 1);
     let b = Service::open(model.clone(), &db, false).unwrap();
     let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
@@ -1027,7 +1034,10 @@ async fn rest_pilot_exercises_one_off_recurring_access_and_separate_simulator_pe
     let mut keys = Vec::new();
     for (user, scopes) in [
         (1, service.self_scopes().join(",")),
-        (2, "payments.simulate,subscriptions.renew".to_string()),
+        (
+            2,
+            "payments.simulate,payments.reconcile,subscriptions.renew".to_string(),
+        ),
     ] {
         keys.push(
             service
@@ -1043,10 +1053,7 @@ async fn rest_pilot_exercises_one_off_recurring_access_and_separate_simulator_pe
     }
     let doc = openb2c_schema::contract::openapi(&service.schema);
     assert!(doc["paths"]["/api/payments/{id}"].get("patch").is_none());
-    assert_eq!(
-        doc["paths"]["/b2c/payments/{id}/simulate"]["post"]["x-openb2c-scope"],
-        "payments.simulate"
-    );
+    assert!(doc["paths"].get("/b2c/payments/{id}/simulate").is_none());
     let app = openb2c_runtime::router(service, doc.to_string(), true);
     request(&app, "GET", "/b2c/catalog", None, None, 200).await;
     let input = json!({"idempotency_key":"rest-order","items":[{"price_id":1,"quantity":1}]});
@@ -1166,4 +1173,362 @@ async fn rest_pilot_exercises_one_off_recurring_access_and_separate_simulator_pe
     for path in ["/", "/admin", "/mcp", "/commerce/catalog"] {
         request(&app, "GET", path, None, None, 404).await;
     }
+}
+
+fn publication(resources: &[&str]) -> Value {
+    use base64::Engine;
+    json!({"idempotency_key":"book-v1","name":"handbook.txt","media_type":"text/plain","content_base64":base64::engine::general_purpose::STANDARD.encode(b"A book owned by its publisher.\n"),"resources":resources})
+}
+
+#[test]
+fn downloads_follow_purchase_refund_subscription_expiry_and_overlapping_grants() {
+    let service = service("downloads_full");
+    let alice = customer(&service, 1);
+    let bob = customer(&service, 2);
+    let file = service
+        .b2c_publish_download(
+            &publication(&["handbook", "membership"]),
+            &AuthContext::system(),
+        )
+        .unwrap();
+    let id = file["id"].as_i64().unwrap();
+    assert!(file.get("content_base64").is_none());
+    assert!(service.b2c_download(id, &alice).is_err());
+    assert_eq!(service.b2c_downloads(&alice).unwrap()["items"], json!([]));
+    let order = make_order(&service, &alice, "download");
+    let payment = make_payment(&service, &alice, &order, "download");
+    assert!(service.b2c_download(id, &alice).is_err());
+    simulate(&service, &payment, "download-paid", "succeeded");
+    assert_eq!(
+        service.b2c_download(id, &alice).unwrap().bytes,
+        b"A book owned by its publisher.\n"
+    );
+    assert!(service.b2c_download(id, &bob).is_err());
+    assert_eq!(
+        service.b2c_downloads(&alice).unwrap()["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let subscription = subscribe(&service, &alice, "member", 2);
+    simulate(
+        &service,
+        &subscription["payment"],
+        "member-paid",
+        "succeeded",
+    );
+    simulate(&service, &payment, "download-refund", "refunded");
+    simulate(&service, &payment, "download-refund", "refunded");
+    // The independently purchased membership still provides access.
+    assert!(service.b2c_download(id, &alice).is_ok());
+    let cancelled = service
+        .b2c_cancel_subscription(1, &json!({}), &alice)
+        .unwrap();
+    let end = at(cancelled["subscription"]["current_period_end"]
+        .as_str()
+        .unwrap());
+    assert!(
+        service
+            .b2c_download_at(id, &alice, end - chrono::Duration::seconds(1))
+            .is_ok()
+    );
+    assert!(service.b2c_download_at(id, &alice, end).is_err());
+    assert_eq!(
+        service.b2c_downloads_at(&alice, end).unwrap()["items"],
+        json!([])
+    );
+    assert!(service.b2c_download(id, &alice).is_ok());
+    service
+        .b2c_withdraw_download(id, &AuthContext::system())
+        .unwrap();
+    service
+        .b2c_withdraw_download(id, &AuthContext::system())
+        .unwrap();
+    assert!(service.b2c_download(id, &alice).is_err());
+    // A replay cannot accidentally republish a withdrawn file.
+    assert_eq!(
+        service
+            .b2c_publish_download(
+                &publication(&["membership", "handbook"]),
+                &AuthContext::system()
+            )
+            .unwrap()["status"],
+        "withdrawn"
+    );
+}
+
+#[test]
+fn downloads_are_independent_immutable_private_and_preserved_in_backups() {
+    use openb2c_runtime::operations;
+    let broken = evaluated("broken_downloads");
+    assert!(!broken.status.success());
+    assert!(String::from_utf8_lossy(&broken.stderr).contains("downloads requires entitlements"));
+    for selection in ["downloads", "downloads_renamed"] {
+        let service = service(selection);
+        let alice = customer(&service, 1);
+        assert!(!service.schema.capabilities.contains_key("catalog"));
+        let input = publication(&["handbook"]);
+        assert!(service.b2c_publish_download(&input, &alice).is_err());
+        let file = service
+            .b2c_publish_download(&input, &AuthContext::system())
+            .unwrap();
+        assert_eq!(
+            service
+                .b2c_publish_download(&input, &AuthContext::system())
+                .unwrap(),
+            file
+        );
+        for (field, value) in [
+            ("content_base64", json!("Y2hhbmdlZA==")),
+            ("resources", json!(["other"])),
+            ("name", json!("different.txt")),
+        ] {
+            let mut changed = input.clone();
+            changed[field] = value;
+            assert!(
+                service
+                    .b2c_publish_download(&changed, &AuthContext::system())
+                    .is_err()
+            );
+        }
+        for (field, value) in [
+            ("name", json!("../escape.txt")),
+            ("media_type", json!("text/plain\r\nx: y")),
+            ("resources", json!([])),
+            ("content_base64", json!("")),
+            ("content_base64", json!("!invalid")),
+        ] {
+            let mut changed = input.clone();
+            changed[field] = value;
+            assert!(
+                service
+                    .b2c_publish_download(&changed, &AuthContext::system())
+                    .is_err()
+            );
+        }
+        let table = table(&service, "downloads", "file");
+        for op in ["create", "read", "update", "delete"] {
+            assert!(!service.schema.operations[table][op].enabled);
+        }
+        service
+            .b2c_grant_entitlement(
+                &json!({"idempotency_key":"manual","user_id":1,"resource":"handbook"}),
+                &AuthContext::system(),
+            )
+            .unwrap();
+        let expected = service.b2c_download(1, &alice).unwrap().bytes;
+        let root = std::env::temp_dir().join(format!(
+            "openb2c-download-backup-{}-{selection}-{}",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let migrations = root.join("migrations");
+        std::fs::create_dir(&migrations).unwrap();
+        let backup = root.join("backup.sqlite");
+        let saved = operations::backup(&service.db, &backup, &migrations).unwrap();
+        let restored = root.join("restored.sqlite");
+        let restored_migrations = root.join("restored-migrations");
+        operations::restore(
+            &backup,
+            saved["sha256"].as_str().unwrap(),
+            &restored,
+            &restored_migrations,
+        )
+        .unwrap();
+        let restored = Service::open_at(
+            service.schema.clone(),
+            &restored,
+            false,
+            &restored_migrations,
+        )
+        .unwrap();
+        assert_eq!(restored.b2c_download(1, &alice).unwrap().bytes, expected);
+        // Storage corruption fails closed rather than sending unchecked bytes.
+        restored
+            .db
+            .execute(
+                &format!("UPDATE {} SET content_base64='Y29ycnVwdA=='", quote(table)),
+                [],
+            )
+            .unwrap();
+        assert!(restored.b2c_download(1, &alice).is_err());
+        drop(restored);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn rest_downloads_return_protected_bytes_and_reject_workflow_bypasses() {
+    let service = service("downloads_full");
+    let mut keys = Vec::new();
+    for (user, scopes) in [
+        (1, service.self_scopes().join(",")),
+        (2, "downloads.publish,payments.simulate".into()),
+    ] {
+        keys.push(
+            service
+                .create_api_key(
+                    &json!({"user_id":user,"name":"Downloads test","scopes":scopes}),
+                    &AuthContext::system(),
+                )
+                .unwrap()["key"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+        );
+    }
+    let doc = openb2c_schema::contract::openapi(&service.schema);
+    assert!(doc["paths"]["/b2c/downloads/{id}/content"]["get"]["responses"]["200"]["content"]["application/octet-stream"].is_object());
+    let app = openb2c_runtime::router(service, doc.to_string(), true);
+    let input = publication(&["handbook"]);
+    request(
+        &app,
+        "POST",
+        "/b2c/downloads",
+        None,
+        Some(input.clone()),
+        401,
+    )
+    .await;
+    request(
+        &app,
+        "POST",
+        "/b2c/downloads",
+        Some(&keys[0]),
+        Some(input.clone()),
+        403,
+    )
+    .await;
+    let file = request(
+        &app,
+        "POST",
+        "/b2c/downloads",
+        Some(&keys[1]),
+        Some(input),
+        200,
+    )
+    .await;
+    request(&app, "GET", "/b2c/downloads/1/content", None, None, 401).await;
+    request(
+        &app,
+        "GET",
+        "/b2c/downloads/1/content",
+        Some(&keys[0]),
+        None,
+        404,
+    )
+    .await;
+    request(
+        &app,
+        "GET",
+        "/b2c/downloads/1/content",
+        Some(&keys[1]),
+        None,
+        403,
+    )
+    .await;
+    request(
+        &app,
+        "GET",
+        "/api/download_files/1",
+        Some(&keys[0]),
+        None,
+        404,
+    )
+    .await;
+    let order = request(
+        &app,
+        "POST",
+        "/b2c/orders",
+        Some(&keys[0]),
+        Some(json!({"idempotency_key":"download-rest","items":[{"price_id":1,"quantity":1}]})),
+        200,
+    )
+    .await;
+    let path = format!("/b2c/orders/{}/payments", order["order"]["id"]);
+    let p = request(
+        &app,
+        "POST",
+        &path,
+        Some(&keys[0]),
+        Some(json!({"idempotency_key":"download-rest"})),
+        200,
+    )
+    .await;
+    let settle = format!("/b2c/payments/{}/simulate", p["id"]);
+    request(
+        &app,
+        "POST",
+        &settle,
+        Some(&keys[1]),
+        Some(json!({"event_id":"download-paid","outcome":"succeeded"})),
+        200,
+    )
+    .await;
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/b2c/downloads/1/content")
+                .header("authorization", format!("Bearer {}", keys[0]))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(response.headers()["content-type"], "text/plain");
+    assert_eq!(response.headers()["cache-control"], "private, no-store");
+    assert_eq!(
+        response.headers()["content-disposition"],
+        "attachment; filename=\"handbook.txt\""
+    );
+    assert_eq!(
+        response.headers()["etag"],
+        format!("\"{}\"", file["sha256"].as_str().unwrap())
+    );
+    assert_eq!(
+        &response.into_body().collect().await.unwrap().to_bytes()[..],
+        b"A book owned by its publisher.\n"
+    );
+    let library = request(&app, "GET", "/b2c/downloads", Some(&keys[0]), None, 200).await;
+    assert!(library["items"][0].get("content_base64").is_none());
+    request(
+        &app,
+        "POST",
+        "/b2c/downloads/1/withdraw",
+        Some(&keys[0]),
+        Some(json!({})),
+        403,
+    )
+    .await;
+    request(
+        &app,
+        "POST",
+        &settle,
+        Some(&keys[1]),
+        Some(json!({"event_id":"download-refunded","outcome":"refunded"})),
+        200,
+    )
+    .await;
+    request(
+        &app,
+        "GET",
+        "/b2c/downloads/1/content",
+        Some(&keys[0]),
+        None,
+        404,
+    )
+    .await;
+    request(
+        &app,
+        "POST",
+        "/b2c/downloads/1/withdraw",
+        Some(&keys[1]),
+        Some(json!({})),
+        200,
+    )
+    .await;
 }

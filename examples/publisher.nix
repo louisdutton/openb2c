@@ -1,15 +1,22 @@
 {...}: {
   name = "Digital publisher";
-  description = "Digital books and reader membership; simulated payments only";
+  description = "Digital books and reader membership paid by bank transfer";
   currency = "GBP";
 
+  accounting.enable = true;
+  billing.enable = true;
+  documents.enable = true;
+  purchasing.enable = true;
+  banking.enable = true;
+  tax.enable = true;
+
   customers.enable = true;
-  auth.password.enable = true;
   catalog.enable = true;
   orders.enable = true;
   payments.enable = true;
   subscriptions.enable = true;
   entitlements.enable = true;
+  downloads.enable = true;
 
   demo.products = {
     digital-book = {

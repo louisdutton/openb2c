@@ -49,7 +49,7 @@ fn schema(selection: &str) -> Schema {
         .clone()
 }
 fn service() -> Service {
-    Service::open(schema("passwords"), ":memory:", false).unwrap()
+    Service::open(schema("customers"), ":memory:", false).unwrap()
 }
 fn signup(service: &Service, email: &str) -> Value {
     service
@@ -141,7 +141,12 @@ fn signup_is_atomic_and_password_contracts_protect_internal_state() {
             )
             .is_err()
     );
-    for table in ["user", "password_credential", "password_session"] {
+    for table in [
+        "user",
+        "customer_profile",
+        "password_credential",
+        "password_session",
+    ] {
         assert_eq!(
             service
                 .db
@@ -347,7 +352,7 @@ async fn request(
 }
 #[tokio::test]
 async fn browserless_signup_login_checkout_isolation_and_logout_work_over_http() {
-    let service = Service::open(schema("password_shop"), ":memory:", false).unwrap();
+    let service = Service::open(schema("full"), ":memory:", false).unwrap();
     let doc = openb2c_schema::contract::openapi(&service.schema);
     assert!(doc["paths"]["/auth/signup"]["post"]["responses"]["201"].is_object());
     assert!(doc["paths"].get("/api/password_credentials").is_none());
@@ -476,7 +481,8 @@ async fn browserless_signup_login_checkout_isolation_and_logout_work_over_http()
 }
 
 #[tokio::test]
-async fn peer_rate_limits_use_the_socket_address_and_passwords_remain_optional() {
+async fn peer_rate_limits_use_the_socket_address_and_platform_accounts_are_independent_of_customers()
+ {
     use sha2::{Digest, Sha256};
     let service = service();
     let peer = hex::encode(Sha256::digest(b"192.0.2.10"));
@@ -501,8 +507,15 @@ async fn peer_rate_limits_use_the_socket_address_and_passwords_remain_optional()
     assert_eq!(app.oneshot(request).await.unwrap().status(), 429);
     let service = Service::open(schema("customers"), ":memory:", false).unwrap();
     let doc = openb2c_schema::contract::openapi(&service.schema);
+    assert!(doc["paths"]["/auth/signup"]["post"].is_object());
+    assert!(service.schema.tables.contains_key("password_credential"));
+    let session = signup(&service, "default-auth@example.test");
+    assert!(service.authenticate(token(&session)).is_ok());
+    let service = Service::open(schema("catalog"), ":memory:", false).unwrap();
+    let doc = openb2c_schema::contract::openapi(&service.schema);
     assert!(doc["paths"].get("/auth/signup").is_none());
-    assert!(!service.schema.tables.contains_key("password_credential"));
+    assert!(service.schema.tables.contains_key("password_credential"));
+    assert!(doc["paths"]["/auth/login"]["post"].is_object());
     assert!(
         service
             .password_signup(

@@ -13,6 +13,12 @@ in {
     description = "Create and settle order payments when orders and payments are enabled.";
   };
   config = lib.mkIf config.orders.payments.enable {
+    workflows = let
+      r = import ../lib/reactions.nix {inherit config lib;};
+    in {
+      order_payment = r.orderPayment;
+      order_cancellation = r.orderCancellation;
+    };
     capabilities.order_payments = {
       requires = ["orders" "payments"];
       entities.link = lib.mkDefault "order_payment";

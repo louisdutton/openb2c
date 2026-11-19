@@ -1,10 +1,10 @@
-//! Password authentication is a selectable consumer of customer identities.
+//! Password authentication is a platform policy for independent accounts and staff memberships.
 use crate::{
     AuthContext, Service, identity,
     service::{Result, ServiceError},
 };
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier, password_hash::SaltString};
-use openb2c_schema::{capabilities::entity, sql::quote};
+use openb2c_schema::sql::quote;
 use rusqlite::{OptionalExtension, params};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -50,7 +50,7 @@ fn digest(value: &str) -> String {
 fn decode<T: serde::de::DeserializeOwned>(input: &Value) -> Result<T> {
     serde_json::from_value(input.clone()).map_err(|e| invalid(&e.to_string()))
 }
-fn email(value: &str) -> Result<String> {
+pub(crate) fn email(value: &str) -> Result<String> {
     let value = value.trim().to_lowercase();
     if value.len() > 254 || !EMAIL.is_match(&value) {
         return Err(invalid("A valid email address is required"));
@@ -98,7 +98,7 @@ fn matches(value: &str, hash: &str) -> bool {
 
 impl Service {
     fn password_table(&self, role: &str) -> Result<&str> {
-        entity(&self.schema, "password_auth", role)
+        self.entity("password_auth", role)
             .ok_or_else(|| ServiceError::new("not_found", "Password authentication is not enabled"))
     }
     // Persist reservations before checking secrets, including failed requests.
@@ -136,6 +136,9 @@ impl Service {
         crate::service::commit(tx)
     }
     fn password_session(&self, user: i64) -> Result<Value> {
+        if self.account_scopes(user)?.is_empty() {
+            return Err(unauthorized());
+        }
         let token = identity::secret("pwd_")?;
         let expires = identity::after(SESSION_SECONDS);
         self.db.execute(
@@ -145,13 +148,22 @@ impl Service {
             ),
             params![user, digest(&token), expires],
         )?;
-        let customer = entity(&self.schema, "customers", "customer").ok_or_else(unauthorized)?;
-        let row = self.raw(customer, &json!(user))?;
+        let customer = self
+            .entity("accounts", "account")
+            .ok_or_else(unauthorized)?;
+        let (email, name): (String, String) = self.db.query_row(
+            &format!("SELECT email,name FROM {} WHERE id=?", quote(customer)),
+            [user],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
         Ok(
-            json!({"access_token":token,"token_type":"Bearer","expires_in":SESSION_SECONDS,"expires_at":expires,"user":{"id":user,"email":row["email"],"name":row["name"]}}),
+            json!({"access_token":token,"token_type":"Bearer","expires_in":SESSION_SECONDS,"expires_at":expires,"user":{"id":user,"email":email,"name":name}}),
         )
     }
     pub fn password_signup(&self, input: &Value, peer: &str) -> Result<Value> {
+        let membership = self
+            .entity("customers", "customer")
+            .ok_or_else(|| ServiceError::new("not_found", "Customer signup is not enabled"))?;
         self.password_table("credential")?;
         let input: Signup = decode(input)?;
         let email = email(&input.email)?;
@@ -164,8 +176,12 @@ impl Service {
         if name.is_empty() || name.chars().count() > 120 {
             return Err(invalid("Name must contain 1 to 120 characters"));
         }
-        let customer = entity(&self.schema, "customers", "customer").ok_or_else(unauthorized)?;
+        let customer = self
+            .entity("accounts", "account")
+            .ok_or_else(unauthorized)?;
+        #[cfg(feature = "reference")]
         let data = json!({"email":email,"name":name});
+        #[cfg(feature = "reference")]
         self.validate_input(customer, data.as_object().unwrap(), true)?;
         let hash = hash_password(&input.password)?;
         let tx = crate::service::transaction(&self.db)?;
@@ -184,11 +200,19 @@ impl Service {
                 "Registration is unavailable for these details",
             ));
         }
+        #[cfg(feature = "reference")]
         self.db.execute(
             &format!("INSERT INTO {} (email,name) VALUES (?,?)", quote(customer)),
             params![email, name],
         )?;
+        #[cfg(feature = "reference")]
         let user = self.db.last_insert_rowid();
+        #[cfg(not(feature = "reference"))]
+        let user = self.insert_signup_account(&email, name)?;
+        self.db.execute(
+            &format!("INSERT INTO {} (user_id) VALUES (?)", quote(membership)),
+            [user],
+        )?;
         self.db.execute(
             &format!(
                 "INSERT INTO {} (user_id,password_hash) VALUES (?,?)",
@@ -200,13 +224,66 @@ impl Service {
         crate::service::commit(tx)?;
         Ok(response)
     }
+    pub fn recover_password(
+        &self,
+        account_email: &str,
+        password: &str,
+        auth: &AuthContext,
+    ) -> Result<Value> {
+        if !auth.has_scope("*") {
+            return Err(ServiceError::new(
+                "forbidden",
+                "Local owner authority is required",
+            ));
+        }
+        let email = email(account_email)?;
+        new_password(password)?;
+        let hash = hash_password(password)?;
+        let tx = crate::service::transaction(&self.db)?;
+        let user = self
+            .db
+            .query_row("SELECT id FROM user WHERE lower(email)=?", [&email], |r| {
+                r.get::<_, i64>(0)
+            })
+            .optional()?
+            .ok_or_else(unauthorized)?;
+        let credential = self.password_table("credential")?;
+        self.db.execute(&format!("INSERT INTO {} (user_id,password_hash) VALUES (?,?) ON CONFLICT(user_id) DO UPDATE SET password_hash=excluded.password_hash",quote(credential)),params![user,hash])?;
+        self.db.execute(
+            &format!(
+                "UPDATE {} SET revoked=1 WHERE user_id=?",
+                quote(self.password_table("session")?)
+            ),
+            [user],
+        )?;
+        self.db
+            .execute("UPDATE api_key SET active=0 WHERE user_id=?", [user])?;
+        self.db.execute(
+            &format!(
+                "DELETE FROM {} WHERE account_key=?",
+                quote(self.password_table("attempt")?)
+            ),
+            [digest(&email)],
+        )?;
+        self.cap_audit(
+            credential,
+            "accounts.recover_password",
+            auth,
+            None,
+            &json!({"id":user,"user_id":user}),
+        )?;
+        crate::service::commit(tx)?;
+        Ok(json!({"user_id":user,"sessions_revoked":true,"api_keys_revoked":true}))
+    }
     pub fn password_login(&self, input: &Value, peer: &str) -> Result<Value> {
         let credentials = quote(self.password_table("credential")?);
         let input: Login = decode(input)?;
         let email = email(&input.email)?;
         self.password_attempt(&email, peer)?;
-        let customer =
-            quote(entity(&self.schema, "customers", "customer").ok_or_else(unauthorized)?);
+        let customer = quote(
+            self.entity("accounts", "account")
+                .ok_or_else(unauthorized)?,
+        );
         let account: Option<(i64,String)> = self.db.query_row(&format!("SELECT u.id,p.password_hash FROM {customer} u JOIN {credentials} p ON p.user_id=u.id WHERE lower(u.email)=?"), [&email], |r| Ok((r.get(0)?,r.get(1)?))).optional()?;
         let verified = matches(
             &input.password,
@@ -238,10 +315,15 @@ impl Service {
         if token.len() != 68 || !token.starts_with("pwd_") {
             return Err(unauthorized());
         }
-        let table = entity(&self.schema, "password_auth", "session").ok_or_else(unauthorized)?;
+        let table = self
+            .entity("password_auth", "session")
+            .ok_or_else(unauthorized)?;
         let user: Option<i64> = self.db.query_row(&format!("SELECT user_id FROM {} WHERE token_hash=? AND revoked=0 AND julianday(expires_at)>julianday('now')", quote(table)), [digest(token)], |r| r.get(0)).optional()?;
         let user = user.ok_or_else(unauthorized)?;
-        let mut scopes = self.self_scopes();
+        let mut scopes = self.account_scopes(user)?;
+        if scopes.is_empty() {
+            return Err(unauthorized());
+        }
         scopes.push("auth.session".into());
         Ok(AuthContext {
             user_id: Some(user),
@@ -263,9 +345,15 @@ impl Service {
         let auth = self.authenticate_password_session(token)?;
         let user = auth.user_id.ok_or_else(unauthorized)?;
         let input: Change = decode(input)?;
-        let customer = entity(&self.schema, "customers", "customer").ok_or_else(unauthorized)?;
-        let account = self.raw(customer, &json!(user))?;
-        self.password_attempt(account["email"].as_str().ok_or_else(unauthorized)?, peer)?;
+        let customer = self
+            .entity("accounts", "account")
+            .ok_or_else(unauthorized)?;
+        let email: String = self.db.query_row(
+            &format!("SELECT email FROM {} WHERE id=?", quote(customer)),
+            [user],
+            |row| row.get(0),
+        )?;
+        self.password_attempt(&email, peer)?;
         let table = quote(self.password_table("credential")?);
         let old: String = self.db.query_row(
             &format!("SELECT password_hash FROM {table} WHERE user_id=?"),

@@ -177,6 +177,7 @@ impl Registry {
 }
 
 impl Service {
+    #[cfg(feature = "reference")]
     pub fn self_scopes(&self) -> Vec<String> {
         self.schema
             .operations
@@ -191,9 +192,22 @@ impl Service {
                     })
             })
             .chain(openb2c_schema::capabilities::customer_scopes(&self.schema))
+            .chain(
+                self.schema
+                    .capabilities
+                    .contains_key("subscriptions")
+                    .then_some("subscriptions.retry".to_owned()),
+            )
             .collect()
     }
     pub fn ensure_user(&self, email: &str) -> Result<i64> {
+        let normalized;
+        let email = if self.cap_enabled("accounts") {
+            normalized = crate::passwords::email(email)?;
+            normalized.as_str()
+        } else {
+            email
+        };
         let existing = self
             .db
             .query_row("SELECT id FROM user WHERE email = ?", [email], |r| r.get(0))
@@ -389,13 +403,7 @@ impl Service {
         self.db.execute("INSERT INTO api_key (user_id,name,scopes,key_hash,key_prefix,expires_at) VALUES (?,?,?,?,?,?)", params![user,name,scopes.join(","),hash,&key[..11],input["expires_at"].as_str()])?;
         let row = self.raw("api_key", &json!(self.db.last_insert_rowid()))?;
         let mut row = row;
-        let operation = self
-            .schema
-            .operations
-            .get("api_key")
-            .and_then(|ops| ops.get("create"))
-            .cloned()
-            .unwrap_or_default();
+        let operation = self.policy("api_key", "create")?;
         self.record(
             "api_key",
             &row["id"],

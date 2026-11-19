@@ -43,7 +43,6 @@ let
 
   authType = lib.types.submodule {
     options = {
-      password.enable = lib.mkEnableOption "password signup, login and revocable bearer sessions";
       roles = lib.mkOption {
         type = lib.types.attrsOf authRoleType;
         default = {
@@ -971,6 +970,11 @@ in {
   ];
   config.seed.applyFixturesByDefault = lib.mkDefault (config.seed.catalog != {});
   options = {
+    workflows = lib.mkOption {
+      type = lib.types.attrsOf lib.types.attrs;
+      default = {};
+      description = "Business event reactions compiled into direct Rust calls; never interpreted by the generated service.";
+    };
     currency = lib.mkOption {
       type = lib.types.nullOr (lib.types.strMatching "[A-Z]{3}");
       default = null;

@@ -1,6 +1,9 @@
 use super::*;
+use crate::records::{
+    EntitlementsEntitlement as Entitlement, EntitlementsEntitlementStatus as Status,
+    EntitlementsEntitlementWrite as EntitlementWrite, Record,
+};
 use serde::Deserialize;
-
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Grant {
@@ -10,9 +13,8 @@ struct Grant {
     #[serde(default)]
     ends_at: Option<String>,
 }
-
 impl Service {
-    pub(super) fn cap_grant(
+    pub(crate) fn cap_grant(
         &self,
         user: i64,
         resource: &str,
@@ -20,37 +22,46 @@ impl Service {
         end: Option<&str>,
         auth: &AuthContext,
         now: DateTime<Utc>,
-    ) -> Result<Value> {
-        let table = self.cap_table("entitlements", "entitlement")?;
-        let row = if let Some(old) =
-            self.cap_find(table, "source_key", SqlValue::Text(source.into()))?
-        {
-            if old["user_id"] != user || old["resource"] != resource {
+    ) -> Result<Entitlement> {
+        if let Some(old) = Entitlement::first(self, "WHERE source_key=?", &[&source])? {
+            if old.user_id != user || old.resource != resource {
                 return Err(state(
                     "Entitlement source is bound to a different customer or resource",
                 ));
             }
-            let next = self.cap_update(
-                table,
-                integer(&old, "id")?,
-                json!({"status":"active","ends_at":end}),
-            )?;
-            self.cap_audit(table, "entitlements.extend", auth, Some(&old), &next)?;
-            next
+            let next = EntitlementWrite {
+                status: Status::Active.into(),
+                ends_at: end.map(str::to_owned).into(),
+                ..Default::default()
+            }
+            .update(self, old.id)?;
+            next.audit(self, "entitlements.extend", auth, Some(&old))?;
+            Ok(next)
         } else {
-            let next=self.cap_insert(table,json!({"user_id":user,"resource":resource,"source_key":source,"status":"active","starts_at":now.to_rfc3339(),"ends_at":end}))?;
-            self.cap_audit(table, "entitlements.grant", auth, None, &next)?;
-            next
-        };
-        Ok(row)
+            let next = EntitlementWrite {
+                user_id: user.into(),
+                resource: resource.to_owned().into(),
+                source_key: source.to_owned().into(),
+                status: Status::Active.into(),
+                starts_at: now.to_rfc3339().into(),
+                ends_at: end.map(str::to_owned).into(),
+                ..Default::default()
+            }
+            .insert(self)?;
+            next.audit(self, "entitlements.grant", auth, None)?;
+            Ok(next)
+        }
     }
-    pub(super) fn cap_revoke_source(&self, source: &str, auth: &AuthContext) -> Result<()> {
-        let table = self.cap_table("entitlements", "entitlement")?;
-        if let Some(old) = self.cap_find(table, "source_key", SqlValue::Text(source.into()))?
-            && old["status"] != "revoked"
+    pub(crate) fn cap_revoke_source(&self, source: &str, auth: &AuthContext) -> Result<()> {
+        if let Some(old) = Entitlement::first(self, "WHERE source_key=?", &[&source])?
+            && old.status != Status::Revoked
         {
-            let next = self.cap_update(table, integer(&old, "id")?, json!({"status":"revoked"}))?;
-            self.cap_audit(table, "entitlements.revoke", auth, Some(&old), &next)?;
+            let next = EntitlementWrite {
+                status: Status::Revoked.into(),
+                ..Default::default()
+            }
+            .update(self, old.id)?;
+            next.audit(self, "entitlements.revoke", auth, Some(&old))?;
         }
         Ok(())
     }
@@ -60,11 +71,8 @@ impl Service {
     pub fn b2c_entitlements_at(&self, auth: &AuthContext, now: DateTime<Utc>) -> Result<Value> {
         self.cap_command("entitlements", "entitlements.read", auth)?;
         let user = self.cap_customer(auth)?;
-        let items=self.query(&format!("SELECT * FROM {} WHERE user_id=? AND status='active' AND julianday(starts_at)<=julianday(?) AND (ends_at IS NULL OR julianday(ends_at)>julianday(?)) ORDER BY id",quote(self.cap_table("entitlements","entitlement")?)),&[SqlValue::Integer(user),SqlValue::Text(now.to_rfc3339()),SqlValue::Text(now.to_rfc3339())])?;
-        let items = items
-            .into_iter()
-            .map(|row| self.cap_response(self.cap_table("entitlements", "entitlement")?, row))
-            .collect::<Result<Vec<_>>>()?;
+        let time = now.to_rfc3339();
+        let items=Entitlement::select(self,"WHERE user_id=? AND status='active' AND julianday(starts_at)<=julianday(?) AND (ends_at IS NULL OR julianday(ends_at)>julianday(?)) ORDER BY id",&[&user,&time,&time])?.iter().map(|r|r.wire(self)).collect::<Result<Vec<_>>>()?;
         Ok(json!({"items":items}))
     }
     pub fn b2c_grant_entitlement(&self, input: &Value, auth: &AuthContext) -> Result<Value> {
@@ -97,21 +105,15 @@ impl Service {
             input.idempotency_key
         );
         let tx = crate::service::transaction(&self.db)?;
-        if let Some(old) = self.cap_find(
-            self.cap_table("entitlements", "entitlement")?,
-            "source_key",
-            SqlValue::Text(source.clone()),
-        )? {
-            if old["user_id"] != input.user_id
-                || old["resource"] != input.resource
-                || old["ends_at"] != json!(end)
+        if let Some(old) = Entitlement::first(self, "WHERE source_key=?", &[&source])? {
+            if old.user_id != input.user_id || old.resource != input.resource || old.ends_at != end
             {
                 return Err(ServiceError::new(
                     "conflict",
                     "Grant idempotency key already used with different data",
                 ));
             }
-            return self.cap_response(self.cap_table("entitlements", "entitlement")?, old);
+            return old.wire(self);
         }
         let grant = self.cap_grant(
             input.user_id,
@@ -121,17 +123,16 @@ impl Service {
             auth,
             now,
         )?;
-        let result = self.cap_response(self.cap_table("entitlements", "entitlement")?, grant)?;
+        let result = grant.wire(self)?;
         crate::service::commit(tx)?;
         Ok(result)
     }
     pub fn b2c_revoke_entitlement(&self, id: i64, auth: &AuthContext) -> Result<Value> {
         self.cap_command("entitlements", "entitlements.revoke", auth)?;
         let tx = crate::service::transaction(&self.db)?;
-        let table = self.cap_table("entitlements", "entitlement")?;
-        let old = self.raw(table, &json!(id))?;
-        self.cap_revoke_source(text(&old, "source_key")?, auth)?;
-        let row = self.cap_response(table, self.raw(table, &json!(id))?)?;
+        let old = Entitlement::get(self, id)?;
+        self.cap_revoke_source(&old.source_key, auth)?;
+        let row = Entitlement::get(self, id)?.wire(self)?;
         crate::service::commit(tx)?;
         Ok(row)
     }

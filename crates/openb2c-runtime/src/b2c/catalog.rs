@@ -1,4 +1,5 @@
 use super::*;
+use crate::records::{CatalogPrice, CatalogProduct, Record};
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -13,52 +14,40 @@ pub(super) struct Price {
 }
 impl Service {
     pub(super) fn cap_price(&self, id: i64) -> Result<Price> {
-        let price = self.raw(self.cap_table("catalog", "price")?, &json!(id))?;
-        let product = self.raw(self.cap_table("catalog", "product")?, &price["product_id"])?;
-        if price["active"] != 1 || product["active"] != 1 {
+        let price = CatalogPrice::get(self, id)?;
+        let product = CatalogProduct::get(self, price.product_id)?;
+        if price.active != 1 || product.active != 1 {
             return Err(state("Price or product is inactive"));
         }
-        let amount = integer(&price, "amount_minor")?;
-        let currency = text(&price, "currency")?;
-        if amount < 1 || currency.len() != 3 || !currency.bytes().all(|b| b.is_ascii_uppercase()) {
+        if price.amount_minor < 1
+            || price.currency.len() != 3
+            || !price.currency.bytes().all(|b| b.is_ascii_uppercase())
+        {
             return Err(invalid("Invalid catalog price"));
         }
         Ok(Price {
             id,
-            product_id: integer(&product, "id")?,
-            product_code: text(&product, "code")?.into(),
-            name: text(&product, "name")?.into(),
-            amount_minor: amount,
-            currency: currency.into(),
-            billing_interval: text(&price, "billing_interval")?.into(),
+            product_id: product.id,
+            product_code: product.code,
+            name: product.name,
+            amount_minor: price.amount_minor,
+            currency: price.currency,
+            billing_interval: price.billing_interval.as_str().into(),
         })
     }
     pub fn b2c_catalog(&self) -> Result<Value> {
-        let products = self.cap_table("catalog", "product")?;
-        let prices = self.cap_table("catalog", "price")?;
-        let items = self.query(
-            &format!(
-                "SELECT * FROM {} WHERE active=1 ORDER BY id LIMIT 1000",
-                quote(products)
-            ),
-            &[],
-        )?;
-        let mut result = Vec::new();
-        for product in items {
-            let offers = self.query(
-                &format!(
-                    "SELECT * FROM {} WHERE product_id=? AND active=1 ORDER BY id LIMIT 1000",
-                    quote(prices)
-                ),
-                &[sql_value(&product["id"])?],
-            )?;
-            let product = self.cap_response(products, product)?;
-            let offers = offers
-                .into_iter()
-                .map(|row| self.cap_response(prices, row))
-                .collect::<Result<Vec<_>>>()?;
-            result.push(json!({"product":product,"prices":offers}));
+        let mut items = Vec::new();
+        for product in CatalogProduct::select(self, "WHERE active=1 ORDER BY id LIMIT 1000", &[])? {
+            let prices = CatalogPrice::select(
+                self,
+                "WHERE product_id=? AND active=1 ORDER BY id LIMIT 1000",
+                &[&product.id],
+            )?
+            .iter()
+            .map(|r| r.wire(self))
+            .collect::<Result<Vec<_>>>()?;
+            items.push(json!({"product":product.wire(self)?,"prices":prices}));
         }
-        Ok(json!({"items":result}))
+        Ok(json!({"items":items}))
     }
 }

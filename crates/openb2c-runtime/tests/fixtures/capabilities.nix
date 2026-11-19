@@ -7,14 +7,30 @@
       catalog = ["catalog"];
       orders = ["customers" "catalog" "orders"];
       payments = ["customers" "payments"];
+      starling = ["customers" "payments"];
+      open_banking = ["customers" "payments"];
       subscriptions = ["customers" "catalog" "payments" "subscriptions"];
       entitlements = ["customers" "entitlements"];
+      downloads = ["customers" "entitlements" "downloads"];
+      downloads_full = full ++ ["downloads"];
+      broken_downloads = ["downloads"];
+      downloads_renamed = ["customers" "entitlements" "downloads"];
       inherit full;
+      office = full ++ ["accounting" "billing" "documents" "purchasing" "banking" "tax"];
+      office_no_billing = full ++ ["accounting" "documents" "purchasing" "banking" "tax"];
+      ledger = ["accounting"];
+      billing = ["accounting" "billing"];
+      billing_payments = ["accounting" "billing" "customers" "payments"];
+      broken_billing_payments = ["accounting" "billing"];
+      purchasing = ["accounting" "documents" "purchasing"];
+      banking = ["accounting" "banking"];
+      tax = ["accounting" "tax"];
+      broken_billing = ["billing"];
+      broken_purchasing = ["accounting" "purchasing"];
+      office_renamed = ["accounting" "billing"];
+      office_without_sales = full ++ ["accounting" "billing"];
       renamed = full;
       broken = ["orders"];
-      passwords = ["customers"];
-      password_shop = full;
-      broken_passwords = [];
       without_entitlements = lib.remove "entitlements" full;
       without_access = full;
       without_order_payments = full;
@@ -27,7 +43,8 @@ in
     inherit lib;
     modules = [
       (lib.genAttrs selected (_: {enable = true;}))
-      {auth.password.enable = lib.elem selection ["passwords" "password_shop" "broken_passwords"];}
+      (lib.optionalAttrs (selection == "starling") {payments.feed = "starling";})
+      (lib.optionalAttrs (selection == "open_banking") {payments.feed = "open_banking";})
       (lib.optionalAttrs (selection == "without_access") {
         orders.entitlements.enable = false;
         subscriptions.entitlements.enable = false;
@@ -37,6 +54,30 @@ in
       })
       (lib.optionalAttrs (selection == "broken_integration") {
         orders.payments.enable = true;
+      })
+      (lib.optionalAttrs (selection == "broken_billing_payments") {
+        billing.payments.enable = true;
+      })
+      (lib.optionalAttrs (lib.elem selection ["office" "office_no_billing"]) {
+        billing.taxCode = "standard";
+        tax.vat.registration = "registered";
+      })
+      (lib.optionalAttrs (selection == "office_without_sales") {
+        billing.orders.enable = false;
+        billing.subscriptions.enable = false;
+      })
+      (lib.optionalAttrs (selection == "office_renamed") {
+        capabilities.accounting.entities = {
+          account = "chart";
+          journal = "entry";
+          line = "entry_line";
+          period = "close";
+        };
+        capabilities.billing.entities = {
+          invoice = "bill";
+          credit = "credit";
+          receipt = "receipt";
+        };
       })
       ({config, ...}: {
         organization.name = "Capability tests";
@@ -90,26 +131,28 @@ in
             }
           ];
         };
-        capabilities = lib.optionalAttrs (selection == "renamed") {
-          catalog.entities = {
-            product = "offering";
-            price = "offer_price";
-          };
-          orders.entities = {
-            order = "checkout";
-            item = "checkout_item";
-          };
-          payments.entities = {
-            payment = "charge";
-            event = "charge_event";
-          };
-          subscriptions.entities = {
-            subscription = "agreement";
-            attempt = "agreement_charge";
-          };
-          entitlements.entities.entitlement = "access_grant";
-          order_payments.entities.link = "checkout_charge";
-        };
+        capabilities =
+          (lib.optionalAttrs (selection == "renamed") {
+            catalog.entities = {
+              product = "offering";
+              price = "offer_price";
+            };
+            orders.entities = {
+              order = "checkout";
+              item = "checkout_item";
+            };
+            payments.entities = {
+              payment = "charge";
+              event = "charge_event";
+            };
+            subscriptions.entities = {
+              subscription = "agreement";
+              attempt = "agreement_charge";
+            };
+            entitlements.entities.entitlement = "access_grant";
+            order_payments.entities.link = "checkout_charge";
+          })
+          // lib.optionalAttrs (selection == "downloads_renamed") {downloads.entities.file = "publication";};
       })
     ];
   }

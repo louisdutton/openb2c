@@ -1,5 +1,9 @@
-//! Consumers subscribe to domain events; providers do not depend on consumers.
+//! The order payment command; event orchestration is compiled from Nix.
 use super::*;
+use crate::records::{
+    OrderPaymentsLink as Link, OrderPaymentsLinkWrite, OrdersOrder, OrdersOrderStatus,
+    PaymentsPayment as Payment, PaymentsPaymentStatus, Record,
+};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -7,206 +11,57 @@ use serde::Deserialize;
 struct OrderPayment {
     idempotency_key: String,
 }
-pub(super) struct OrderPayments;
-pub(super) struct OrderEntitlements;
-pub(super) struct SubscriptionEntitlements;
-
 impl Service {
     pub fn b2c_order_payment(&self, id: i64, input: &Value, auth: &AuthContext) -> Result<Value> {
+        self.b2c_order_payment_at(id, input, auth, Utc::now())
+    }
+    pub fn b2c_order_payment_at(
+        &self,
+        id: i64,
+        input: &Value,
+        auth: &AuthContext,
+        now: DateTime<Utc>,
+    ) -> Result<Value> {
         self.cap_command("order_payments", "orders.pay", auth)?;
         let input: OrderPayment = decode(input)?;
         key(&input.idempotency_key)?;
         let tx = crate::service::transaction(&self.db)?;
-        let order = self.cap_owned("orders", "order", id, "orders.pay", auth)?;
-        let links = self.cap_table("order_payments", "link")?;
-        let previous = self.query(
-            &format!(
-                "SELECT * FROM {} WHERE order_id=? AND request_key=?",
-                quote(links)
-            ),
-            &[
-                SqlValue::Integer(id),
-                SqlValue::Text(input.idempotency_key.clone()),
-            ],
-        )?;
-        if let Some(link) = previous.first() {
-            return self.cap_response(
-                self.cap_table("payments", "payment")?,
-                self.raw(self.cap_table("payments", "payment")?, &link["payment_id"])?,
-            );
+        let order = self.owned::<OrdersOrder>(id, "orders", "orders.pay", auth)?;
+        if let Some(link) = Link::first(
+            self,
+            "WHERE order_id=? AND request_key=?",
+            &[&id, &input.idempotency_key],
+        )? {
+            return self.payment_view(&Payment::get(self, link.payment_id)?);
         }
-        if order["status"] != "pending" {
+        if order.status != OrdersOrderStatus::Pending {
             return Err(state("Only pending orders accept payments"));
         }
-        for link in self.query(
-            &format!(
-                "SELECT * FROM {} WHERE order_id=? ORDER BY id DESC LIMIT 1",
-                quote(links)
-            ),
-            &[SqlValue::Integer(id)],
-        )? {
-            let previous = self.raw(self.cap_table("payments", "payment")?, &link["payment_id"])?;
-            if previous["status"] != "failed" {
+        if let Some(link) = Link::first(self, "WHERE order_id=? ORDER BY id DESC LIMIT 1", &[&id])?
+        {
+            if Payment::get(self, link.payment_id)?.status != PaymentsPaymentStatus::Failed {
                 return Err(state(
                     "An existing payment must finish before creating another attempt",
                 ));
             }
         }
         let payment = self.cap_payment(
-            integer(&order, "user_id")?,
-            integer(&order, "amount_minor")?,
-            text(&order, "currency")?,
+            order.user_id,
+            order.amount_minor,
+            &order.currency,
             &format!("order:{id}:{}", input.idempotency_key),
             auth,
-            Utc::now(),
+            now,
         )?;
-        self.cap_insert(
-            links,
-            json!({"order_id":id,"payment_id":payment["id"],"request_key":input.idempotency_key}),
-        )?;
-        let result = self.cap_response(self.cap_table("payments", "payment")?, payment)?;
+        OrderPaymentsLinkWrite {
+            order_id: id.into(),
+            payment_id: payment.id.into(),
+            request_key: input.idempotency_key.into(),
+            ..Default::default()
+        }
+        .insert(self)?;
+        let result = self.payment_view(&payment)?;
         crate::service::commit(tx)?;
         Ok(result)
-    }
-}
-
-impl Consumer for OrderPayments {
-    fn capability(&self) -> &'static str {
-        "order_payments"
-    }
-    fn handle(
-        &self,
-        service: &Service,
-        event: &Event,
-        auth: &AuthContext,
-        now: DateTime<Utc>,
-    ) -> Result<()> {
-        let links = service.cap_table("order_payments", "link")?;
-        match event {
-            Event::Payment {
-                before: _,
-                after: payment,
-            } => {
-                let Some(link) =
-                    service.cap_find(links, "payment_id", sql_value(&payment["id"])?)?
-                else {
-                    return Ok(());
-                };
-                let table = service.cap_table("orders", "order")?;
-                let old = service.raw(table, &link["order_id"])?;
-                if old["user_id"] != payment["user_id"]
-                    || old["amount_minor"] != payment["amount_minor"]
-                    || old["currency"] != payment["currency"]
-                {
-                    return Err(state("Payment does not match its order"));
-                }
-                let status = match text(payment, "status")? {
-                    "succeeded" if old["status"] == "pending" => "paid",
-                    "refunded" if old["status"] == "paid" => "refunded",
-                    "failed" => return Ok(()),
-                    _ => return Err(state("Payment conflicts with its order state")),
-                };
-                let next =
-                    service.cap_update(table, integer(&old, "id")?, json!({"status":status}))?;
-                service.cap_audit(table, "orders.payment", auth, Some(&old), &next)?;
-                service.cap_publish(
-                    Event::Order {
-                        before: old,
-                        after: next,
-                    },
-                    auth,
-                    now,
-                )
-            }
-            Event::Order {
-                before: _,
-                after: order,
-            } if order["status"] == "cancelled" => {
-                for link in service.query(
-                    &format!("SELECT * FROM {} WHERE order_id=?", quote(links)),
-                    &[sql_value(&order["id"])?],
-                )? {
-                    service.cap_cancel_payment(integer(&link, "payment_id")?, auth)?;
-                }
-                Ok(())
-            }
-            _ => Ok(()),
-        }
-    }
-}
-
-impl Consumer for OrderEntitlements {
-    fn capability(&self) -> &'static str {
-        "order_entitlements"
-    }
-    fn handle(
-        &self,
-        service: &Service,
-        event: &Event,
-        auth: &AuthContext,
-        now: DateTime<Utc>,
-    ) -> Result<()> {
-        let Event::Order {
-            before: _,
-            after: order,
-        } = event
-        else {
-            return Ok(());
-        };
-        let id = integer(order, "id")?;
-        let table = service.cap_table("orders", "item")?;
-        for item in service.query(
-            &format!("SELECT * FROM {} WHERE order_id=?", quote(table)),
-            &[SqlValue::Integer(id)],
-        )? {
-            let source = format!("order:{id}:item:{}", item["id"]);
-            if order["status"] == "paid" {
-                service.cap_grant(
-                    integer(order, "user_id")?,
-                    text(&item, "product_code")?,
-                    &source,
-                    None,
-                    auth,
-                    now,
-                )?;
-            } else if [json!("refunded"), json!("cancelled")].contains(&order["status"]) {
-                service.cap_revoke_source(&source, auth)?;
-            }
-        }
-        Ok(())
-    }
-}
-impl Consumer for SubscriptionEntitlements {
-    fn capability(&self) -> &'static str {
-        "subscription_entitlements"
-    }
-    fn handle(
-        &self,
-        service: &Service,
-        event: &Event,
-        auth: &AuthContext,
-        now: DateTime<Utc>,
-    ) -> Result<()> {
-        let Event::Subscription {
-            before: _,
-            after: subscription,
-        } = event
-        else {
-            return Ok(());
-        };
-        let source = format!("subscription:{}", subscription["id"]);
-        if subscription["status"] == "active" {
-            service.cap_grant(
-                integer(subscription, "user_id")?,
-                text(subscription, "product_code")?,
-                &source,
-                subscription["current_period_end"].as_str(),
-                auth,
-                now,
-            )?;
-        } else {
-            service.cap_revoke_source(&source, auth)?;
-        }
-        Ok(())
     }
 }

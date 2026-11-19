@@ -4,7 +4,7 @@
   modules,
 }: let
   model = lib.evalModules {
-    modules = [../base.nix] ++ builtins.attrValues (import ../capabilities) ++ modules;
+    modules = [../base.nix {_module.args.expr = import ./expr.nix;}] ++ builtins.attrValues (import ../capabilities) ++ modules;
   };
   inherit (model) config;
   compose = import ./compose.nix {inherit lib;};
@@ -18,6 +18,6 @@ in
   if missing != []
   then throw "Invalid capability composition: ${lib.concatStringsSep "; " missing}"
   else {
-    inherit (config) organization currency capabilities tables constraints derived seed auth audit integrations effectContracts presentation;
+    inherit (config) organization currency capabilities workflows tables constraints derived seed auth audit integrations effectContracts presentation;
     operations = compose.processOperations config.tables config.relationships config.operations;
   }

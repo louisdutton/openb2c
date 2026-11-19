@@ -1,11 +1,23 @@
 //! Shared native runtime copied into each generated application's support crates.
+pub mod accounts;
 pub mod b2c;
+pub mod backoffice;
+#[cfg(not(feature = "reference"))]
+mod compiled_api;
+#[cfg(not(feature = "reference"))]
+mod compiled_operations;
+#[cfg(not(feature = "reference"))]
+mod composition;
 pub mod effects;
 pub mod identity;
 pub mod migrations;
+pub mod operations;
 pub mod passwords;
+#[cfg(not(feature = "reference"))]
+mod records;
 pub mod service;
 mod text;
+pub mod transitions;
 pub mod web;
 
 pub use service::{AuthContext, Service};

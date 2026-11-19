@@ -2,21 +2,22 @@
   config,
   lib,
   ...
-}: {
-  options.customers.enable = lib.mkEnableOption "customer records and credentials";
-  config = lib.mkIf config.customers.enable (lib.mkMerge [
-    (import ../modules/user.nix {inherit config lib;})
-    (import ../modules/api_key.nix {inherit config lib;})
-    {
-      capabilities.customers.entities = {
-        customer = "user";
-        credential = "api_key";
-      };
-      operations.user = {
-        create.enabled = false;
-        update.enabled = false;
-        delete.enabled = false;
-      };
-    }
-  ]);
+}: let
+  f = import ../lib/finance.nix;
+  customer = config.capabilities.customers.entities.customer or "customer_profile";
+  account = config.capabilities.accounts.entities.account or "user";
+in {
+  options.customers.enable = lib.mkEnableOption "customer records and self-service signup";
+  config = lib.mkIf config.customers.enable {
+    capabilities.customers = {
+      version = 2;
+      requires = ["accounts"];
+      entities.customer = lib.mkDefault "customer_profile";
+    };
+    tables.${customer} = {
+      id = f.id;
+      user_id = (f.fk account) // {unique = true;};
+    };
+    operations.${customer} = import ../lib/private.nix;
+  };
 }

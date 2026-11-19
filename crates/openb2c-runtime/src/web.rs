@@ -67,6 +67,11 @@ impl Settings {
                 .collect(),
             version: env!("CARGO_PKG_VERSION").into(),
         };
+        #[cfg(not(feature = "reference"))]
+        anyhow::ensure!(
+            settings.auth_enabled,
+            "Authentication is required by this compiled service"
+        );
         anyhow::ensure!(
             !production()
                 || settings.auth_enabled
@@ -286,6 +291,12 @@ async fn handle(State(state): State<AppState>, request: Request<Body>) -> Respon
     };
     let mut response = response;
     let headers = response.headers_mut();
+    if parts.uri.path().starts_with("/b2c/downloads") {
+        headers.insert(
+            "cache-control",
+            HeaderValue::from_static("private, no-store"),
+        );
+    }
     for (name, value) in [
         ("x-openb2c-api-version", state.settings.version.as_str()),
         ("x-request-id", request_id.as_str()),
@@ -353,7 +364,7 @@ fn authenticate(
         return Ok(AuthContext::system());
     }
     if let Some(certificate) = headers.get("x-certificate") {
-        if !service.schema.tables.contains_key("identity_registry") {
+        if !service.model_has_table("identity_registry") {
             return Err(ServiceError::new(
                 "unauthorized",
                 "Certificate identity is not enabled",
@@ -459,12 +470,13 @@ fn dispatch(
         .service
         .lock()
         .map_err(|_| ServiceError::new("internal_error", "Service unavailable"))?;
+    service.assert_current_model()?;
     let auth = authenticate(state, &service, headers, method.as_str(), path)?;
     if matches!(
         path,
         "/auth/signup" | "/auth/login" | "/auth/logout" | "/auth/password"
     ) {
-        if !service.schema.capabilities.contains_key("password_auth") || *method != Method::POST {
+        if !service.cap_enabled("password_auth") || *method != Method::POST {
             return Err(ServiceError::new(
                 "not_found",
                 "Unknown authentication endpoint",
@@ -502,7 +514,7 @@ fn dispatch(
         }
         return Ok(response);
     }
-    if path.starts_with("/identity/") && !service.schema.tables.contains_key("identity_challenge") {
+    if path.starts_with("/identity/") && !service.model_has_table("identity_challenge") {
         return Err(ServiceError::new(
             "not_found",
             "Identity capability is not enabled",
@@ -618,7 +630,46 @@ fn dispatch(
         };
         return Ok(axum::Json(value).into_response());
     }
+    #[cfg(not(feature = "reference"))]
+    if path.starts_with("/backoffice/") || path.starts_with("/b2c/") {
+        return crate::composition::rest(&service, method, path, headers, bytes, &auth);
+    }
+    #[cfg(feature = "reference")]
+    if path.starts_with("/backoffice/") {
+        return Ok(ok(crate::backoffice::rest::dispatch(
+            &service, method, path, headers, bytes, &auth,
+        )?));
+    }
+    #[cfg(feature = "reference")]
     if path.starts_with("/b2c/") {
+        let segments = path.trim_matches('/').split('/').collect::<Vec<_>>();
+        if let ["b2c", "downloads", id, "content"] = segments.as_slice()
+            && *method == Method::GET
+        {
+            let id =
+                id.parse::<i64>().ok().filter(|id| *id > 0).ok_or_else(|| {
+                    ServiceError::new("invalid", "A positive record ID is required")
+                })?;
+            let file = service.b2c_download(id, &auth)?;
+            let mut response = file.bytes.into_response();
+            for (name, value) in [
+                ("content-type", file.media_type),
+                (
+                    "content-disposition",
+                    format!("attachment; filename=\"{}\"", file.name),
+                ),
+                ("etag", format!("\"{}\"", file.sha256)),
+                ("cache-control", "private, no-store".into()),
+            ] {
+                response.headers_mut().insert(
+                    axum::http::header::HeaderName::from_static(name),
+                    HeaderValue::from_str(&value).map_err(|_| {
+                        ServiceError::new("internal_error", "Invalid stored file metadata")
+                    })?,
+                );
+            }
+            return Ok(response);
+        }
         return Ok(ok(crate::b2c::rest::dispatch(
             &service, method, path, headers, bytes, &auth,
         )?));
@@ -629,10 +680,7 @@ fn dispatch(
             .split('/')
             .collect::<Vec<_>>();
         let table = service
-            .schema
-            .tables
-            .keys()
-            .find(|t| format!("{t}s") == parts[0])
+            .api_table(parts[0])
             .ok_or_else(|| ServiceError::new("not_found", "Unknown entity"))?;
         let response = match (method.as_str(), parts.as_slice()) {
             ("GET", [_]) => {
@@ -662,10 +710,7 @@ fn dispatch(
                         }
                         _ if key.starts_with("filter[") && key.ends_with(']') => {
                             let field = &key[7..key.len() - 1];
-                            let col = service.columns(table)?.get(field).ok_or_else(|| {
-                                ServiceError::new("invalid", "Unknown filter field")
-                            })?;
-                            let value = match col.kind {
+                            let value = match service.column_kind(table, field)? {
                                 openb2c_schema::SqlType::Integer => {
                                     json!(value.parse::<i64>().map_err(|_| {
                                         ServiceError::new("invalid", "Integer filter expected")
@@ -749,7 +794,7 @@ fn parse_id(s: &str) -> Result<Value> {
         .map_err(|_| ServiceError::new("invalid", "ID must be an integer"))
 }
 fn parse_entity_id(service: &Service, table: &str, id: &str) -> Result<Value> {
-    if service.columns(table)?[service.primary_key(table)?].kind == openb2c_schema::SqlType::Integer
+    if service.column_kind(table, service.primary_key(table)?)? == openb2c_schema::SqlType::Integer
     {
         parse_id(id)
     } else {

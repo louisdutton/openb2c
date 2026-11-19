@@ -8,6 +8,7 @@ license.workspace = true
 anyhow.workspace = true
 serde_json.workspace = true
 openb2c-schema.workspace = true
+sha2 = "0.10"
 
 [dev-dependencies]
 openb2c-runtime = { path = "../openb2c-runtime" }

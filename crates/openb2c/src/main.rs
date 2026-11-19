@@ -1,3 +1,4 @@
+mod compile;
 mod evaluate;
 mod generate;
 

@@ -10,6 +10,47 @@ use serde_json::{Value, json};
 use sha2::Sha256;
 use std::{env, time::Duration};
 
+struct OutboxRecord {
+    id: i64,
+    entity: String,
+    record_id: String,
+    operation: String,
+    effect_json: String,
+    data_json: String,
+}
+impl OutboxRecord {
+    fn read(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
+        Ok(Self {
+            id: row.get("id")?,
+            entity: row.get("entity")?,
+            record_id: row.get("record_id")?,
+            operation: row.get("operation")?,
+            effect_json: row.get("effect_json")?,
+            data_json: row.get("data_json")?,
+        })
+    }
+}
+struct DeliveryAttempt {
+    id: i64,
+    effect_type: String,
+    payload_json: String,
+    idempotency_key: String,
+    attempts: i64,
+    max_attempts: i64,
+}
+impl DeliveryAttempt {
+    fn read(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
+        Ok(Self {
+            id: row.get("id")?,
+            effect_type: row.get("effect_type")?,
+            payload_json: row.get("payload_json")?,
+            idempotency_key: row.get("idempotency_key")?,
+            attempts: row.get("attempts")?,
+            max_attempts: row.get("max_attempts")?,
+        })
+    }
+}
+
 pub fn hmac(secret: &str, body: &[u8]) -> String {
     let mut mac =
         Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key size");
@@ -180,12 +221,9 @@ impl Service {
             .header("content-type", "application/json")
             .header("idempotency-key", key)
             .body(body.clone());
-        let signing = &self
-            .schema
-            .metadata
-            .get("integrations")
-            .unwrap_or(&Value::Null)["webhookEffects"]["signing"];
-        if !email && signing["enabled"] == true {
+        if let Some((timestamp_header, signature_header)) =
+            self.webhook_signing().filter(|_| !email)
+        {
             let secret = env::var("WEBHOOK_SIGNING_SECRET").map_err(|_| {
                 ServiceError::new(
                     "invalid",
@@ -195,18 +233,8 @@ impl Service {
             let ts = Utc::now().timestamp().to_string();
             let signature = hmac(&secret, format!("{ts}.{body}").as_bytes());
             request = request
-                .header(
-                    signing["timestampHeader"]
-                        .as_str()
-                        .unwrap_or("X-OpenB2C-Timestamp"),
-                    &ts,
-                )
-                .header(
-                    signing["signatureHeader"]
-                        .as_str()
-                        .unwrap_or("X-OpenB2C-Signature"),
-                    format!("sha256={signature}"),
-                );
+                .header(timestamp_header, &ts)
+                .header(signature_header, format!("sha256={signature}"));
         }
         let response = request
             .send()
@@ -221,15 +249,14 @@ impl Service {
     }
     pub fn dispatch_effects(&self, force: bool) -> Result<Value> {
         // Import the transactional operation outbox into the compatibility ledger.
-        let rows = self.query(
-            "SELECT * FROM openb2c_rust_outbox WHERE status='pending' ORDER BY id",
-            &[],
-        )?;
+        let mut statement=self.db.prepare("SELECT id,entity,record_id,operation,effect_json,data_json FROM openb2c_rust_outbox WHERE status='pending' ORDER BY id")?;
+        let rows = statement
+            .query_map([], OutboxRecord::read)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
         for row in rows {
-            let effect: Value = serde_json::from_str(row["effect_json"].as_str().unwrap_or("null"))
+            let effect: Value = serde_json::from_str(&row.effect_json)
                 .map_err(|_| ServiceError::new("invalid", "Invalid pending effect"))?;
-            let data: Value = serde_json::from_str(row["data_json"].as_str().unwrap_or("null"))
-                .unwrap_or(Value::Null);
+            let data: Value = serde_json::from_str(&row.data_json).unwrap_or(Value::Null);
             let (kind, mut payload) = if let Some(kind) = effect["type"].as_str() {
                 (kind.to_string(), effect["payload"].clone())
             } else if !effect["emit"].is_null() {
@@ -245,14 +272,22 @@ impl Service {
             if let Some(object) = payload.as_object_mut() {
                 object.insert("data".into(), data);
             }
-            let key = format!("operation-outbox:{}", row["id"]);
-            self.queue_effect(&key,&kind,&payload,&json!({"entity":row["entity"],"operation":row["operation"],"recordId":row["record_id"]}))?;
+            let key = format!("operation-outbox:{}", row.id);
+            self.queue_effect(
+                &key,
+                &kind,
+                &payload,
+                &json!({"entity":row.entity,"operation":row.operation,"recordId":row.record_id}),
+            )?;
             self.db.execute(
                 "UPDATE openb2c_rust_outbox SET status='queued' WHERE id=?",
-                [row["id"].as_i64()],
+                [row.id],
             )?;
         }
-        let rows=self.query("SELECT * FROM openb2c_effect_attempt WHERE status IN ('pending','failed') AND (? OR next_attempt_at IS NULL OR julianday(next_attempt_at)<=julianday('now')) ORDER BY id LIMIT 100",&[rusqlite::types::Value::Integer(i64::from(force))])?;
+        let mut statement=self.db.prepare("SELECT id,effect_type,payload_json,idempotency_key,attempts,max_attempts FROM openb2c_effect_attempt WHERE status IN ('pending','failed') AND (? OR next_attempt_at IS NULL OR julianday(next_attempt_at)<=julianday('now')) ORDER BY id LIMIT 100")?;
+        let rows = statement
+            .query_map([force], DeliveryAttempt::read)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
         self.db.execute("UPDATE openb2c_effect_attempt SET status=CASE WHEN attempts>=max_attempts THEN 'dead_letter' ELSE 'failed' END WHERE status='processing' AND julianday(updated_at)<julianday('now','-1 minute')",[])?;
         let mut attempted = 0;
         let mut succeeded = 0;
@@ -260,17 +295,14 @@ impl Service {
         let mut dead = 0;
         for row in &rows {
             crate::service::check_deadline()?;
-            if self.db.execute("UPDATE openb2c_effect_attempt SET status='processing',updated_at=? WHERE id=? AND status IN ('pending','failed')",rusqlite::params![now(),row["id"].as_i64()])?!=1{continue;}
+            if self.db.execute("UPDATE openb2c_effect_attempt SET status='processing',updated_at=? WHERE id=? AND status IN ('pending','failed')",rusqlite::params![now(),row.id])?!=1{continue;}
             attempted += 1;
-            let payload: Value =
-                serde_json::from_str(row["payload_json"].as_str().unwrap_or("null"))
-                    .unwrap_or(Value::Null);
-            let attempts = row["attempts"].as_i64().unwrap_or(0) + 1;
-            let result = self.deliver_effect(
-                row["effect_type"].as_str().unwrap_or(""),
-                &payload,
-                row["idempotency_key"].as_str().unwrap_or(""),
-            );
+            let payload: Value = serde_json::from_str(&row.payload_json).unwrap_or(Value::Null);
+            let attempts = row
+                .attempts
+                .checked_add(1)
+                .ok_or_else(|| ServiceError::new("invalid", "Delivery attempt overflow"))?;
+            let result = self.deliver_effect(&row.effect_type, &payload, &row.idempotency_key);
             let (status, error, result) = match result {
                 Ok(result) => {
                     succeeded += 1;
@@ -278,7 +310,7 @@ impl Service {
                 }
                 Err(error) => {
                     failed += 1;
-                    if attempts >= row["max_attempts"].as_i64().unwrap_or(3) {
+                    if attempts >= row.max_attempts {
                         dead += 1;
                         ("dead_letter", Some(error.message), None)
                     } else {
@@ -293,7 +325,7 @@ impl Service {
                 .max(1)
                 .saturating_mul(2i64.saturating_pow((attempts - 1).min(20) as u32))
                 .min(300000);
-            self.db.execute("UPDATE openb2c_effect_attempt SET status=?,attempts=?,last_error=?,result_json=?,next_attempt_at=?,updated_at=? WHERE id=?",params![status,attempts,error,result,(Utc::now()+chrono::Duration::milliseconds(delay)).to_rfc3339(),now(),row["id"].as_i64()])?;
+            self.db.execute("UPDATE openb2c_effect_attempt SET status=?,attempts=?,last_error=?,result_json=?,next_attempt_at=?,updated_at=? WHERE id=?",params![status,attempts,error,result,(Utc::now()+chrono::Duration::milliseconds(delay)).to_rfc3339(),now(),row.id])?;
         }
         Ok(
             json!({"attempted":attempted,"succeeded":succeeded,"failed":failed,"deadLetter":dead,"skipped":0}),
@@ -323,7 +355,13 @@ pub struct Worker {
 }
 impl Worker {
     pub fn start(schema: openb2c_schema::Schema, path: &str) -> anyhow::Result<Self> {
+        #[cfg(not(feature = "reference"))]
+        crate::composition::check_model(&schema)?;
         let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        #[cfg(not(feature = "reference"))]
+        if !crate::composition::WORKER_ENABLED {
+            return Ok(Self { stop, thread: None });
+        }
         if path == ":memory:" {
             return Ok(Self { stop, thread: None });
         }
@@ -335,12 +373,28 @@ impl Worker {
         let thread = std::thread::spawn(move || {
             while !signal.load(std::sync::atomic::Ordering::Relaxed) {
                 let _deadline = crate::service::Deadline::enter(Duration::from_secs(20));
+                #[cfg(not(feature = "reference"))]
+                if let Err(error) = service.assert_current_model() {
+                    eprintln!(
+                        "{}",
+                        json!({"level":"error","message":"Background worker stopped after application upgrade","code":error.code})
+                    );
+                    break;
+                }
+                #[cfg(feature = "reference")]
                 if service.schema.capabilities.contains_key("subscriptions")
                     && let Err(error) = service.b2c_renew_due(&crate::AuthContext::system())
                 {
                     eprintln!(
                         "{}",
                         json!({"level":"error","message":"Subscription billing worker failed","code":error.code})
+                    );
+                }
+                #[cfg(not(feature = "reference"))]
+                if let Err(error) = crate::composition::tick(&service) {
+                    eprintln!(
+                        "{}",
+                        json!({"level":"error","message":"Compiled background workflow failed","code":error.code})
                     );
                 }
                 if let Err(error) = service.dispatch_effects(false) {
@@ -369,5 +423,26 @@ impl Drop for Worker {
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
+    }
+}
+
+#[cfg(feature = "reference")]
+impl Service {
+    pub(crate) fn webhook_signing(&self) -> Option<(&str, &str)> {
+        let signing = &self
+            .schema
+            .metadata
+            .get("integrations")
+            .unwrap_or(&Value::Null)["webhookEffects"]["signing"];
+        (signing["enabled"] == true).then(|| {
+            (
+                signing["timestampHeader"]
+                    .as_str()
+                    .unwrap_or("X-OpenB2C-Timestamp"),
+                signing["signatureHeader"]
+                    .as_str()
+                    .unwrap_or("X-OpenB2C-Signature"),
+            )
+        })
     }
 }

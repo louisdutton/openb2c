@@ -5,12 +5,18 @@
 }: let
   subscription = config.capabilities.subscriptions.entities.subscription or "subscription";
   attempt = config.capabilities.subscriptions.entities.attempt or "subscription_payment";
-  customer = config.capabilities.customers.entities.customer or "user";
+  customer = config.capabilities.accounts.entities.account or "user";
   price = config.capabilities.catalog.entities.price or "price";
   payment = config.capabilities.payments.entities.payment or "payment";
 in {
   options.subscriptions.enable = lib.mkEnableOption "subscriptions capability";
   config = lib.mkIf config.subscriptions.enable {
+    workflows.subscription_payment = (import ../lib/reactions.nix {inherit config lib;}).subscriptionPayment;
+    workflows.subscription_due = (import ../lib/reactions.nix {inherit config lib;}).subscriptionDue;
+    workflows.subscription_renewal = {
+      event = "tick";
+      steps = [{_t = "renew_subscriptions";}];
+    };
     capabilities.subscriptions = {
       requires = ["customers" "catalog" "payments"];
       entities = {

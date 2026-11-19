@@ -4,7 +4,7 @@
   ...
 }: let
   entitlement = config.capabilities.entitlements.entities.entitlement or "entitlement";
-  customer = config.capabilities.customers.entities.customer or "user";
+  customer = config.capabilities.accounts.entities.account or "user";
 in {
   options.entitlements.enable = lib.mkEnableOption "entitlements capability";
   config = lib.mkIf config.entitlements.enable {

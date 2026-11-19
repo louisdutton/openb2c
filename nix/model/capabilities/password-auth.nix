@@ -6,7 +6,7 @@
   credential = config.capabilities.password_auth.entities.credential or "password_credential";
   session = config.capabilities.password_auth.entities.session or "password_session";
   attempt = config.capabilities.password_auth.entities.attempt or "password_attempt";
-  customer = config.capabilities.customers.entities.customer or "user";
+  customer = config.capabilities.accounts.entities.account or "user";
   id = {
     type = "integer";
     pk = true;
@@ -23,9 +23,10 @@
     metadata.privacy = "secret";
   };
 in {
-  config = lib.mkIf config.auth.password.enable {
+  config = {
     capabilities.password_auth = {
-      requires = ["customers"];
+      version = 2;
+      requires = ["accounts"];
       entities = {
         credential = lib.mkDefault "password_credential";
         session = lib.mkDefault "password_session";

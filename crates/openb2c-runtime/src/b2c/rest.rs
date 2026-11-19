@@ -11,6 +11,15 @@ pub(crate) fn dispatch(
     auth: &AuthContext,
 ) -> Result<Value> {
     let segments = path.trim_matches('/').split('/').collect::<Vec<_>>();
+    // Historical regression harness only; this router is never exported.
+    if let ["b2c", "payments", id, "simulate"] = segments.as_slice()
+        && method == Method::POST
+    {
+        let id = id
+            .parse::<i64>()
+            .map_err(|_| invalid("Invalid payment ID"))?;
+        return service.b2c_simulate_payment(id, &crate::web::json_body(headers, bytes)?, auth);
+    }
     let endpoint = openb2c_schema::capabilities::endpoints(&service.schema)
         .into_iter()
         .filter(|e| {
@@ -41,6 +50,13 @@ pub(crate) fn dispatch(
             .ok_or_else(|| invalid("A positive record ID is required"))
     };
     match (method.as_str(), segments.as_slice()) {
+        ("GET", ["b2c", "downloads"]) => service.b2c_downloads(auth),
+        ("GET", ["b2c", "downloads", "manage"]) => service.b2c_managed_downloads(auth),
+        ("POST", ["b2c", "downloads"]) => service.b2c_publish_download(&input, auth),
+        ("POST", ["b2c", "downloads", _, "withdraw"]) => {
+            decode::<Empty>(&input)?;
+            service.b2c_withdraw_download(id()?, auth)
+        }
         ("GET", ["b2c", "catalog"]) => service.b2c_catalog(),
         ("POST", ["b2c", "orders"]) => service.b2c_create_order(&input, auth),
         ("GET", ["b2c", "orders", _]) => service.b2c_order(id()?, auth),
@@ -81,6 +97,3 @@ pub(crate) fn dispatch(
         )),
     }
 }
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Empty {}

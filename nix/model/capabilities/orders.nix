@@ -5,7 +5,7 @@
 }: let
   order = config.capabilities.orders.entities.order or "purchase_order";
   item = config.capabilities.orders.entities.item or "order_item";
-  customer = config.capabilities.customers.entities.customer or "user";
+  customer = config.capabilities.accounts.entities.account or "user";
   product = config.capabilities.catalog.entities.product or "product";
   price = config.capabilities.catalog.entities.price or "price";
 in {
